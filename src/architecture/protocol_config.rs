@@ -98,11 +98,29 @@ lazy_static! {
             waiting_for_more: false,
             params: vec!["id".to_string()],
         });
+        m.insert(CMD::PauseTube.to_string(), CommandParseOptions{
+            name: CMD::PauseTube,
+            expected_length: 3,
+            waiting_for_more: false,
+            params: vec!["tube".to_string(), "delay".to_string()],
+        });
         m.insert(CMD::Peek.to_string(), CommandParseOptions{
             name: CMD::Peek,
             expected_length: 2,
             waiting_for_more: false,
             params: vec!["id".to_string()],
+        });
+        m.insert(CMD::PeekReady.to_string(), CommandParseOptions{
+            name: CMD::PeekReady,
+            expected_length: 1,
+            waiting_for_more: false,
+            params: vec![],
+        });
+        m.insert(CMD::PeekDelayed.to_string(), CommandParseOptions{
+            name: CMD::PeekDelayed,
+            expected_length: 1,
+            waiting_for_more: false,
+            params: vec![],
         });
         m.insert(CMD::ListTubesWatched.to_string(), CommandParseOptions{
             name: CMD::ListTubesWatched,
@@ -157,16 +175,22 @@ lazy_static! {
 			param:    "".to_string(),
 			use_job_id: false,
 		});
+	    m.insert(CMD::PauseTube.to_string(), CommandReplyOptions{
+			result:   false,
+			message:  "PAUSED".to_string(),
+			param:    "".to_string(),
+			use_job_id: false,
+		});
 		m.insert(CMD::Touch.to_string(), CommandReplyOptions{
 			result:   false,
-			message:  "INSERTED".to_string(),
+			message:  "TOUCHED".to_string(),
 			param:    "".to_string(),
-			use_job_id: true,
+			use_job_id: false,
 		});
 		m.insert(CMD::Kick.to_string(), CommandReplyOptions{
 			result:   false,
 			message:  "KICKED".to_string(),
-			param:    "".to_string(),
+			param:    "count".to_string(),
 			use_job_id: false,
 		});
 		m.insert(CMD::KickJob.to_string(), CommandReplyOptions{
@@ -174,6 +198,12 @@ lazy_static! {
 			message:  "KICKED".to_string(),
 			param:    "".to_string(),
 			use_job_id: true,
+		});
+		m.insert(CMD::Watch.to_string(), CommandReplyOptions {
+			result:   false,
+			message:  "Ok".to_string(),
+			param:    "count".to_string(),
+			use_job_id: false,
 		});
         m
     };

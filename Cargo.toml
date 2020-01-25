@@ -25,8 +25,9 @@ futures-timer = "2.0.2"
 tokio = { version = "0.2", features = ["full"] }
 fasthash = "0.4"
 beanstalkc = "^0.2.0"
-cpuprofiler = "0.0.4"
 ctrlc = { version = "3.0", features = ["termination"] }
+serde = "1.0"
+serde_yaml = "0.8"
 [dependencies.async-std]
 version = "1.4.0"
 features = ["unstable"]

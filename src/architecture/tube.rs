@@ -12,6 +12,7 @@ use crate::backend::fake_queue::FakeHeap;
 use crate::backend::min_heap::MinHeap;
 use crate::architecture::error::ProtocolError;
 use crate::operation::once_channel::OnceChannel;
+use chrono::Local;
 
 const QUERY_FREQUENCY: Duration = Duration::from_millis(20);
 const MAX_JOB_PER_ITERATION: usize = 20;
@@ -20,6 +21,7 @@ pub trait PriorityQueue<Item: PriorityQueueItem> {
     fn enqueue(&mut self, job: Item);
     fn dequeue(&mut self) -> Option<Item>;
     fn peek(&self) -> Option<&Item>;
+    fn find(&self, id: &Id) -> Option<&Item>;
     fn remove(&mut self, id: &Id) -> Option<Item>;
     fn len(&self) -> usize;
 }
@@ -49,6 +51,7 @@ pub struct Tube<J, A> where
     awaiting_clients: A,
     awaiting_clients_flag: HashMap<ClientId, Id>,
     awaiting_timed_clients: HashMap<Id, AwaitingClient>,
+    pause_tube_time: i64,
 }
 
 //
@@ -66,6 +69,7 @@ impl<J, A> Tube<J, A> where
             awaiting_clients,
             awaiting_clients_flag: HashMap::new(),
             awaiting_timed_clients: HashMap::new(),
+            pause_tube_time: Local::now().timestamp(),
         }
     }
 
@@ -74,12 +78,13 @@ impl<J, A> Tube<J, A> where
     }
 
     pub async fn process(&mut self) {
-        self.process_delayed_quque(MAX_JOB_PER_ITERATION).await;
+        self.process_delayed_queue(MAX_JOB_PER_ITERATION).await;
         self.process_reserved_queue(MAX_JOB_PER_ITERATION).await;
         self.process_ready_queue(MAX_JOB_PER_ITERATION).await;
     }
 
-    pub async fn process_delayed_quque(&mut self, mut limit: usize) {
+    pub async fn process_delayed_queue(&mut self, mut limit: usize) {
+        debug!("{}, delayed queue _size: {}", self.name, self.delayed.len());
         while self.delayed.peek().is_some() && self.delayed.peek().unwrap().key() <= 0 && limit > 0 {
             let mut delayed_job = self.delayed.dequeue().unwrap();
             debug!("job:{} from {} to {}", delayed_job.id(), delayed_job.state(), State::Ready);
@@ -90,6 +95,12 @@ impl<J, A> Tube<J, A> where
     }
 
     pub async fn process_reserved_queue(&mut self, mut limit: usize) {
+        let tm = Local::now().timestamp();
+        if tm < self.pause_tube_time {
+            debug!("tube: {}, wait {} for pause tube", self.name, self.pause_tube_time - tm);
+            return;
+        }
+        debug!("{}, reserve queue _size: {}", self.name, self.reserved.len());
         // 将reserved队列的超时Job，转为ready队列（比如：客户端获取到一个job，但是在规定的时间内，服务端并未收到ack，即处理超时）
         while self.reserved.peek().is_some() && self.reserved.peek().unwrap().key() <= 0 && limit > 0 {
             let mut reserved_job = self.reserved.dequeue().unwrap();
@@ -102,7 +113,7 @@ impl<J, A> Tube<J, A> where
 
     pub async fn process_ready_queue(&mut self, mut limit: usize) {
         // 必须有已连接的客户端以及ready队列不为空
-        debug!("{}, ready len: {}, client: {},", self.name, self.ready.len(), self.awaiting_clients.len());
+        debug!("{}, ready queue len: {}, client: {},", self.name, self.ready.len(), self.awaiting_clients.len());
         while self.awaiting_clients.peek().is_some() && self.ready.peek().is_some() && limit > 0 {
             let mut awaiting_client_connection = self.awaiting_clients.dequeue().unwrap();
             let mut ready_job = self.ready.dequeue().unwrap();
@@ -217,36 +228,71 @@ impl<J, A> Tube<J, A> where
         Ok(())
     }
 
-    pub fn kick(&mut self, cmd: &Command) -> Result<(), ProtocolError> {
-        let mut bound = cmd.params.get("bound").map(|item| item.parse::<i64>().unwrap()).ok_or(ProtocolError::NotFound)?;
-        let _size = self.buried.len() as i64;
-        if _size < bound {
-            bound = _size;
-        }
-        for i in 0..bound {
+    pub fn kick(&mut self, cmd: &Command) -> Result<usize, ProtocolError> {
+        let mut bound = cmd.params.get("bound").map(|item| item.parse::<usize>().unwrap()).ok_or(ProtocolError::BadFormat)?;
+        let _bound = bound.min(self.buried.len());
+        for i in 0.._bound {
             let mut job = self.buried.dequeue().unwrap();
             job.set_state(State::Ready).unwrap();
             self.ready.enqueue(job);
         }
+        if _bound > 0 {
+            return Ok(_bound);
+        }
+
+        let _bound = bound.min(self.delayed.len());
+        for i in 0.._bound {
+            let mut job = self.delayed.dequeue().unwrap();
+            job.set_state(State::Ready).unwrap();
+            self.ready.enqueue(job);
+        }
+        Ok(_bound)
+    }
+
+    pub fn kick_job(&mut self, cmd: &Command) -> Result<(), ProtocolError> {
+        let id = cmd.params.get("id").map(|item| item.parse::<u64>().unwrap()).ok_or(ProtocolError::BadFormat)?;
+        if let Some(_) = self.buried.remove(&id) {
+            return Ok(());
+        }
+        self.delayed.remove(&id).map(|_| ()).ok_or(ProtocolError::NotFound)
+    }
+
+    pub fn pause_tube(&mut self, cmd: &Command) -> Result<(), ProtocolError> {
+        let delay = cmd.params.get("delay").map(|item| item.parse::<i64>().unwrap()).ok_or(ProtocolError::BadFormat)?;
+        self.pause_tube_time = Local::now().timestamp() + delay;
         Ok(())
     }
 
-    // 将kick 状态的job 转为 ready 队列
-    pub fn kick_job(&mut self, cmd: &Command) -> Result<(), ProtocolError> {
-        let id = cmd.params.get("id").unwrap().parse::<Id>().unwrap();
-        match self.buried.remove(&id) {
-            Some(mut job) => {
-                job.set_state(State::Ready).unwrap();
-                self.ready.enqueue(job);
-                Ok(())
-            }
-            None => {
-                Err(ProtocolError::NotFound)
-            }
-        }
+    pub fn touch(&self, cmd: &Command) -> Result<&Id, ProtocolError> {
+        self.peek(cmd).map(|job| job.id())
     }
 
-    // ignore
+    pub fn peek(&self, cmd: &Command) -> Result<&Job, ProtocolError> {
+        let id = cmd.params.get("id").unwrap().parse::<Id>().map_err(|_| ProtocolError::BadFormat)?;
+        if let Some(job) = self.delayed.find(&id) {
+            return Ok(job);
+        }
+        if let Some(job) = self.ready.find(&id) {
+            return Ok(job);
+        }
+        if let Some(job) = self.buried.find(&id) {
+            return Ok(job);
+        }
+        Err(ProtocolError::NotFound)
+    }
+
+    pub fn peek_ready(&self) -> Result<&Job, ProtocolError> {
+        self.ready.peek().ok_or(ProtocolError::NotFound)
+    }
+
+    pub fn peek_delayed(&self) -> Result<&Job, ProtocolError> {
+        self.delayed.peek().ok_or(ProtocolError::NotFound)
+    }
+
+    pub fn peek_buried(&self) -> Result<&Job, ProtocolError> {
+        self.buried.peek().ok_or(ProtocolError::NotFound)
+    }
+
     pub fn ignore(&mut self, client_id: &ClientId) -> Result<(), ProtocolError> {
         self.awaiting_clients_flag.remove(client_id);
         self.awaiting_timed_clients.remove(client_id);

@@ -197,7 +197,10 @@ impl ClientHandler {
                     }
                 }
             }
-            CMD::Peek => {
+            CMD::ListTubesWatched => {
+                let lists: Vec<String> = self.watch_tubes.keys().map(|key|key.clone()).collect();
+                let lists = serde_yaml::to_string(&lists).unwrap();
+                command.yaml = Some(lists);
                 Ok(command)
             }
             CMD::Quit => {
@@ -220,17 +223,14 @@ mod test {
     use std::thread::{self, sleep};
     use tokio::prelude::*;
     use tokio::time::delay_for;
+    use chrono::Local;
 
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime};
 
 
     #[test]
     fn it_double_tube() {
-        let mut conn = Beanstalkc::new()
-            .host("localhost")
-            .port(8080)
-            .connection_timeout(Some(Duration::from_secs(3)))
-            .connect().expect("connect failed");
+        let mut conn = connect();
         let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
         conn.use_tube("ok").unwrap();
         let id = conn.put(b"hello word2", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
@@ -242,11 +242,7 @@ mod test {
 
     #[test]
     fn it_reserve() {
-        let mut conn = Beanstalkc::new()
-            .host("localhost")
-            .port(8080)
-            .connection_timeout(Some(Duration::from_secs(3)))
-            .connect().expect("connect failed");
+        let mut conn = connect();
         let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
         let job = conn.reserve().unwrap();
         println!("{}", job.id());
@@ -254,11 +250,7 @@ mod test {
 
     #[test]
     fn it_reserve_with_timeout() {
-        let mut conn = Beanstalkc::new()
-            .host("localhost")
-            .port(8080)
-            .connection_timeout(Some(Duration::from_secs(3)))
-            .connect().expect("connect failed");
+        let mut conn = connect();
         let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
         let job = conn.reserve_with_timeout(Duration::from_secs(5)).unwrap();
         let id = job.id();
@@ -269,27 +261,50 @@ mod test {
 
     #[test]
     fn it_watch() {
-        let mut conn = Beanstalkc::new()
-            .host("localhost")
-            .port(8080)
-            .connection_timeout(Some(Duration::from_secs(3)))
-            .connect().expect("connect failed");
+        let mut conn = connect();
         let id = conn.watch("ok").unwrap();
     }
 
     #[test]
     fn it_delete() {
-        let mut conn = Beanstalkc::new()
-            .host("localhost")
-            .port(8080)
-            .connection_timeout(Some(Duration::from_secs(3)))
-            .connect().expect("connect failed");
+        let mut conn = connect();
         let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
         let job = conn.reserve().unwrap();
         let id = job.id();
         println!("{}", id);
         let b = conn.delete(id).is_ok();
         assert!(b);
+    }
+
+    #[test]
+    fn it_kick() {
+        let mut conn = connect();
+        let tube = format!("tube_{}", Local::now().timestamp_nanos());
+        conn.use_tube(tube.as_str()).unwrap();
+        let id = conn.put(b"hello", 1, Duration::from_secs(30), Duration::from_secs(5)).unwrap();
+        let count = conn.kick(1).unwrap();
+        assert_eq!(1, count);
+    }
+
+    #[test]
+    fn it_pause_job() {
+        let mut conn = connect();
+        let tube = format!("tube_{}", Local::now().timestamp_nanos());
+        conn.use_tube(tube.as_str()).unwrap();
+
+        let tm = Local::now().timestamp();
+        let id = conn.put(b"hello", 1, Duration::from_secs(5), Duration::from_secs(5)).unwrap();
+        conn.pause_tube(tube.as_str(), Duration::from_secs(100)).unwrap();
+        conn.reserve().unwrap();
+        println!("{}", Local::now().timestamp() - tm);
+    }
+
+    fn connect() -> Beanstalkc {
+        Beanstalkc::new()
+            .host("localhost")
+            .port(11300)
+            .connection_timeout(Some(Duration::from_secs(3)))
+            .connect().expect("connect failed")
     }
 
     #[test]
@@ -328,12 +343,6 @@ mod test {
     #[test]
     fn it_client() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
-
-//        for i in 0..100 {
-//            rt.spawn(async move {
-
-//            });
-//        };
 
         rt.block_on(async move {
             for i in 0..10 {

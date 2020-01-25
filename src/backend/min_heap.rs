@@ -34,6 +34,13 @@ impl<H> PriorityQueue<H> for MinHeap<H> where H: PriorityQueueItem + Ord {
         self.heap.peek_min()
     }
 
+    fn find(&self, id: &Id) -> Option<&H> {
+        match self.heap.binary_search_by_key(id, |item| item.id().clone()) {
+            Ok(idx) => self.heap.get(idx),
+            _ => None
+        }
+    }
+
     fn remove(&mut self, id: &Id) -> Option<H> {
         match self.heap.binary_search_by_key(id, |item| item.id().clone()) {
             Ok(idx) => self.heap.remove(idx),

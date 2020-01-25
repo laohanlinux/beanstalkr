@@ -3,21 +3,13 @@ use crate::architecture::tube::PriorityQueueItem;
 #[derive(Debug, PartialEq, Eq)]
 pub struct FakeHeap<T>(Vec<T>);
 
-impl<T> FakeHeap <T> {
+impl<T> FakeHeap<T> {
     pub fn new() -> Self {
         FakeHeap(Vec::new())
     }
 }
 
 impl<T: Ord> FakeHeap<T> {
-    fn find_min(&self) -> Option<usize> {
-        self.0.iter().enumerate().min_by_key(|p| p.1).map(|p| p.0)
-    }
-
-    fn find_max(&self) -> Option<usize> {
-        self.0.iter().enumerate().max_by_key(|p| p.1).map(|p| p.0)
-    }
-
     pub fn binary_search_by_key<'a, B, F>(
         &'a self,
         b: &B,
@@ -27,6 +19,10 @@ impl<T: Ord> FakeHeap<T> {
             B: Ord,
             F: FnMut(&'a T) -> B {
         self.0.binary_search_by_key(b, f)
+    }
+
+    pub fn get(&self, i: usize) -> Option<&T> {
+        self.0.get(i)
     }
 
     pub fn push(&mut self, element: T) {
@@ -39,6 +35,14 @@ impl<T: Ord> FakeHeap<T> {
 
     pub fn peek_max(&self) -> Option<&T> {
         self.find_max().map(|i| &self.0[i])
+    }
+
+    fn find_min(&self) -> Option<usize> {
+        self.0.iter().enumerate().min_by_key(|p| p.1).map(|p| p.0)
+    }
+
+    fn find_max(&self) -> Option<usize> {
+        self.0.iter().enumerate().max_by_key(|p| p.1).map(|p| p.0)
     }
 
     fn pop_index(&mut self, i: usize) -> T {
@@ -89,24 +93,24 @@ impl<T: Ord> FakeHeap<T> {
     }
 }
 
- #[cfg(test)]
-     mod test {
-     use crate::backend::fake_queue::FakeHeap;
+#[cfg(test)]
+mod test {
+    use crate::backend::fake_queue::FakeHeap;
 
-     #[test]
-     fn it_works() {
-         let mut queue = FakeHeap::new();
-         for i in 0..100 {
-             queue.push(i);
-         }
-         for i in 0..100 {
-             let value = queue.pop_min().unwrap();
-             assert_eq!(i, value);
-         }
-         assert_eq!(queue.len(), 0);
-         queue.push(1);
-         assert_eq!(queue.len(), 1);
-         assert_eq!(queue.remove(0).is_some(), true);
-         assert_eq!(queue.len(), 0);
-     }
-  }
+    #[test]
+    fn it_works() {
+        let mut queue = FakeHeap::new();
+        for i in 0..100 {
+            queue.push(i);
+        }
+        for i in 0..100 {
+            let value = queue.pop_min().unwrap();
+            assert_eq!(i, value);
+        }
+        assert_eq!(queue.len(), 0);
+        queue.push(1);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.remove(0).is_some(), true);
+        assert_eq!(queue.len(), 0);
+    }
+}

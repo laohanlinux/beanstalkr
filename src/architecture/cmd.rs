@@ -3,6 +3,7 @@ use failure::{Fail, bail, Error, err_msg};
 use uuid::Uuid;
 use tokio::prelude::*;
 
+use std::str::FromStr;
 use std::collections::HashMap;
 use crate::architecture::job::{Job, random_factory};
 use crate::architecture::tube::PriorityQueueItem;
@@ -41,6 +42,15 @@ pub enum CMD {
 
     #[strum(to_string = "peek")]
     Peek,
+    #[strum(to_string = "peek-ready")]
+    PeekReady,
+    #[strum(to_string = "peek-delayed")]
+    PeekDelayed,
+    #[strum(to_string = "peek_buried")]
+    PeekBuried,
+
+    #[strum(to_string = "pause-tube")]
+    PauseTube,
     #[strum(to_string = "list-tubes-watched")]
     ListTubesWatched,
 }
@@ -64,6 +74,10 @@ impl Clone for CMD {
             CMD::Kick => CMD::Kick,
             CMD::KickJob => CMD::KickJob,
             CMD::Peek => CMD::Peek,
+            CMD::PeekReady => CMD::PeekReady,
+            CMD::PeekDelayed => CMD::PeekDelayed,
+            CMD::PeekBuried => CMD::PeekBuried,
+            CMD::PauseTube => CMD::PauseTube,
             CMD::ListTubesWatched => CMD::ListTubesWatched,
         }
     }
@@ -79,6 +93,7 @@ pub struct Command {
     pub(crate) not_complete_received: bool,
     pub(crate) not_complete_send: bool,
     pub(crate) job: Job,
+    pub(crate) yaml: Option<String>,
     pub err: Result<(), ProtocolError>,
 }
 
@@ -93,6 +108,7 @@ impl Default for Command {
             not_complete_received: false,
             not_complete_send: false,
             job: Default::default(),
+            yaml: None,
             err: Ok(()),
         }
     }
@@ -168,6 +184,7 @@ impl Command {
 
     // 如果命令处理有问题，则立刻回应
     pub async fn reply(&mut self) -> (bool, String) {
+        let cmd = CMD::from_str(self.name.as_ref()).unwrap();
         if self.err.is_err() {
             return (false, format!("{}", self.err.as_ref().unwrap_err()));
         }
@@ -177,22 +194,31 @@ impl Command {
                 if opts.param.is_empty() {
                     return (false, opts.message.clone());
                 }
-                // debug!("<<-------- {:?}, {}", self.params, opts.param);
-                // USE, WATCH, IGNORE
                 return (false, vec![opts.message.clone(), self.params.get(&opts.param).unwrap().clone()].join(" "));
             }
 
-            // PUT, TOUCH
             return (false, vec![opts.message.clone(), self.job.id().to_string()].join(" "));
         }
 
-        // RESERVE, RESERVE_WITH_TIMEOUT, ListTubesWatched
-//        let cmd: CMD = CMD::from_str(self.name.as_str()).unwrap();
         if !self.not_complete_send {
             self.not_complete_send = true;
-            return (true, format!("RESERVED {} {}", self.job.id(), self.job.bytes));
+            match cmd {
+                CMD::Peek | CMD::PeekReady | CMD::PeekDelayed | CMD::PeekBuried => {
+                    return (true, format!("FOUND {} {}", self.job.id(), self.job.bytes));
+                }
+                CMD::Reserve | CMD::ReserveWithTimeout => {
+                    return (true, format!("RESERVED {} {}", self.job.id(), self.job.bytes));
+                }
+                CMD::ListTubesWatched => {
+                    return (true, format!("OK {}", self.yaml.as_ref().unwrap().len()));
+                }
+                _ => unreachable!()
+            }
         }
-
+        if self.yaml.is_some() {
+            let yaml = self.yaml.as_ref().unwrap();
+            return (false, yaml.clone());
+        }
         (false, format!("{}", self.job.data))
     }
 }

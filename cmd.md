@@ -29,11 +29,11 @@
 - [x] kick-job
 - [x] reserve
 - [x] reserve-with-timeout
-- [ ] peek
-- [ ] peek-ready
-- [ ] peek-delayed
-- [ ] peek-buried
-- [ ] touch
+- [x] peek
+- [x] peek-ready
+- [x] peek-delayed
+- [x] peek-buried
+- [x] touch
 - [x] watch
 - [x] ignore
 - [ ] stats-job
@@ -41,5 +41,5 @@
 - [ ] stats
 - [ ] list-tubes
 - [ ] list-tube-used
-- [ ] list-tubes-watched
-- [ ] pause-tube
+- [x] list-tubes-watched
+- [x] pause-tube

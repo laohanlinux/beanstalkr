@@ -158,16 +158,73 @@ impl Dispatch {
                 tx.send(command.1).await.unwrap();
             }
             CMD::Kick => {
-                command.1.err = tube.kick(&command.1);
+                match tube.kick(&command.1) {
+                    Ok(count) => {
+                        debug!("Count {}", count);
+                        command.1.params.insert("count".to_string(), format!("{}", count));
+                    }
+                    Err(err) => {
+                        command.1.err = Err(err);
+                    }
+                }
                 tx.send(command.1).await.unwrap();
             }
             CMD::KickJob => {
                 command.1.err = tube.kick_job(&command.1);
                 tx.send(command.1).await.unwrap();
             }
-//            CMD::Peek => {
-//
-//            }
+            CMD::PauseTube => {
+                command.1.err = tube.pause_tube(&command.1);
+                tx.send(command.1).await.unwrap();
+            }
+            CMD::Touch => {
+                command.1.err = tube.touch(&command.1).map(|_| ());
+                tx.send(command.1).await.unwrap();
+            }
+            CMD::Peek => {
+                match tube.peek(&command.1) {
+                    Ok(job) => {
+                        command.1.job = job.clone();
+                    }
+                    Err(err) => {
+                        command.1.err = Err(err);
+                    }
+                }
+                tx.send(command.1).await.unwrap();
+            }
+            CMD::PeekReady => {
+                match tube.peek_ready() {
+                    Ok(job) => {
+                        command.1.job = job.clone();
+                    }
+                    Err(err) => {
+                        command.1.err = Err(err);
+                    }
+                }
+                tx.send(command.1).await.unwrap();
+            }
+            CMD::PeekDelayed => {
+                match tube.peek_delayed() {
+                    Ok(job) => {
+                        command.1.job = job.clone();
+                    }
+                    Err(err) => {
+                        command.1.err = Err(err);
+                    }
+                }
+                tx.send(command.1).await.unwrap();
+            }
+            CMD::PeekBuried => {
+                match tube.peek_buried() {
+                    Ok(job) => {
+                        command.1.job = job.clone();
+                    }
+                    Err(err) => {
+                        command.1.err = Err(err);
+                    }
+                }
+                tx.send(command.1).await.unwrap();
+            }
             CMD::Ignore => {
                 tube.ignore(&command.0);
                 tx.send(command.1).await.unwrap();

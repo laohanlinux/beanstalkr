@@ -26,7 +26,6 @@ use async_std::net::{TcpListener, TcpStream};
 use async_std::sync::{Arc, Mutex};
 use failure::{self, Fail, Error, err_msg};
 use env_logger::fmt::Target;
-use cpuprofiler::PROFILER;
 
 use crate::architecture::cmd::Command;
 use crate::operation::ClientHandler;
@@ -37,12 +36,8 @@ use std::process;
 
 fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
-    {
-        PROFILER.lock().unwrap().start("./my-prof.profile").unwrap();
-    }
-
     ctrlc::set_handler(move || {
-        PROFILER.lock().unwrap().stop().unwrap();
+        info!("beanstalkr exit");
         process::exit(0);
     });
 
