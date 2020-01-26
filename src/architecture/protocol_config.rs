@@ -128,6 +128,12 @@ lazy_static! {
             waiting_for_more: false,
             params: vec![],
         });
+        m.insert(CMD::ListTubeUsed.to_string(), CommandParseOptions{
+            name: CMD::ListTubeUsed,
+            expected_length: 1,
+            waiting_for_more: false,
+            params: vec![],
+        });
         m
     };
 
@@ -205,6 +211,12 @@ lazy_static! {
 			param:    "count".to_string(),
 			use_job_id: false,
 		});
+		m.insert(CMD::ListTubeUsed.to_string(), CommandReplyOptions{
+            result: false,
+            message: "USING".to_string(),
+            param: "tube".to_string(),
+            use_job_id: false,
+        });
         m
     };
 }

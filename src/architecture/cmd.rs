@@ -53,6 +53,8 @@ pub enum CMD {
     PauseTube,
     #[strum(to_string = "list-tubes-watched")]
     ListTubesWatched,
+    #[strum(to_string = "list-tube-used")]
+    ListTubeUsed,
 }
 
 impl CMD {}
@@ -79,6 +81,7 @@ impl Clone for CMD {
             CMD::PeekBuried => CMD::PeekBuried,
             CMD::PauseTube => CMD::PauseTube,
             CMD::ListTubesWatched => CMD::ListTubesWatched,
+            CMD::ListTubeUsed => CMD::ListTubeUsed,
         }
     }
 }

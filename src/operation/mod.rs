@@ -203,6 +203,10 @@ impl ClientHandler {
                 command.yaml = Some(lists);
                 Ok(command)
             }
+            CMD::ListTubeUsed => {
+                command.params.insert("tube".to_owned(), self.use_tube.clone());
+                Ok(command)
+            }
             CMD::Quit => {
                 Err(err_msg("Client quit"))
             }
@@ -297,6 +301,14 @@ mod test {
         conn.pause_tube(tube.as_str(), Duration::from_secs(100)).unwrap();
         conn.reserve().unwrap();
         println!("{}", Local::now().timestamp() - tm);
+    }
+
+    #[test]
+    fn it_list_tube_used() {
+        let mut conn = connect();
+        conn.use_tube("hello".as_ref()).unwrap();
+        let tube_name = conn.using().unwrap();
+        assert_eq!(tube_name, "hello".to_string());
     }
 
     fn connect() -> Beanstalkc {
