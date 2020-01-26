@@ -1,7 +1,6 @@
 use strum::*;
 use failure::{Fail, bail, Error, err_msg};
 use uuid::Uuid;
-use tokio::prelude::*;
 
 use std::str::FromStr;
 use std::collections::HashMap;

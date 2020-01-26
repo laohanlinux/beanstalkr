@@ -22,7 +22,6 @@ async-trait = "0.1.22"
 lazy_static = "1.4.0"
 futures = "0.3.1"
 futures-timer = "2.0.2"
-tokio = { version = "0.2", features = ["full"] }
 fasthash = "0.4"
 beanstalkc = "^0.2.0"
 ctrlc = { version = "3.0", features = ["termination"] }

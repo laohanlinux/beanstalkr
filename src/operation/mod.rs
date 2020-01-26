@@ -231,14 +231,19 @@ impl ClientHandler {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use beanstalkc::Beanstalkc;
     use std::thread::{self, sleep};
-    use tokio::prelude::*;
-    use tokio::time::delay_for;
     use chrono::Local;
-
     use std::time::{Duration, Instant, SystemTime};
 
+    #[test]
+    fn it_async() {
+        task::spawn(async move {});
+        task::block_on(async move {
+            println!("Hello");
+        });
+    }
 
     #[test]
     fn it_double_tube() {
@@ -325,75 +330,5 @@ mod test {
             .port(11300)
             .connection_timeout(Some(Duration::from_secs(3)))
             .connect().expect("connect failed")
-    }
-
-    #[test]
-    fn it_client1() {
-        let mut v = vec![];
-//        for i in 0..10 {
-//            v.push(thread::spawn(move || {
-//                let mut conn = Beanstalkc::new()
-//                    .host("localhost")
-//                    .port(8080)
-//                    .connection_timeout(Some(Duration::from_secs(3)))
-//                    .connect().expect("connect failed");
-//                while let Ok(id) = conn.reserve().map(|job| job.id()) {
-//                    println!("{}", id);
-//                    conn.delete(id).unwrap();
-//                }
-//            }));
-//        }
-
-        for i in 0..2 {
-            v.push(thread::spawn(move || {
-                let mut conn = Beanstalkc::new()
-                    .host("localhost")
-                    .port(8080)
-                    .connection_timeout(Some(Duration::from_secs(3)))
-                    .connect().expect("connect failed");
-                while let Ok(id) = conn.reserve().map(|job| job.id()) {
-                    println!("{}", id);
-                    conn.delete(id).unwrap();
-                }
-            }));
-        }
-        sleep(Duration::from_secs(100));
-    }
-
-    #[test]
-    fn it_client() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
-
-        rt.block_on(async move {
-            for i in 0..10 {
-                tokio::spawn(async move {
-                    let mut conn = Beanstalkc::new()
-                        .host("localhost")
-                        .port(8080)
-                        .connection_timeout(Some(Duration::from_secs(3)))
-                        .connect().expect("connect failed");
-
-                    for i in 0..100 {
-                        let id = conn.put(b"hello word", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
-                        println!("job id {}", id);
-                    }
-                });
-            }
-            for i in 0..1000 {
-                tokio::spawn(async move {
-                    let mut conn = Beanstalkc::new()
-                        .host("localhost")
-                        .port(8080)
-                        .connection_timeout(Some(Duration::from_secs(3)))
-                        .connect().expect("connect failed");
-                    while let Ok(id) = conn.reserve().map(|job| job.id()) {
-                        println!("{}", id);
-                        conn.delete(id).unwrap();
-                    }
-                });
-            }
-
-            delay_for(Duration::from_secs(300)).await;
-        });
     }
 }
