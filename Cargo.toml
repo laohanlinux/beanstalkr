@@ -31,6 +31,3 @@ serde_yaml = "0.8"
 [dependencies.async-std]
 version = "1.4.0"
 features = ["unstable"]
-[dependencies.rocksdb]
-default-features = false
-features = ["lz4"]
