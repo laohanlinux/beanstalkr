@@ -198,9 +198,17 @@ impl ClientHandler {
                 }
             }
             CMD::ListTubesWatched => {
-                let lists: Vec<String> = self.watch_tubes.keys().map(|key|key.clone()).collect();
+                let lists: Vec<String> = self.watch_tubes.keys().map(|key| key.clone()).collect();
                 let lists = serde_yaml::to_string(&lists).unwrap();
                 command.yaml = Some(lists);
+                Ok(command)
+            }
+            CMD::ListTubes => {
+                let mut dispatch = self.dispatch.lock().await;
+                let (count, tubes) = dispatch.list_tubes();
+                let lists = serde_yaml::to_string(&tubes).unwrap();
+                command.yaml = Some(lists);
+                command.params.insert("count".to_owned(), format!("{}", count));
                 Ok(command)
             }
             CMD::ListTubeUsed => {

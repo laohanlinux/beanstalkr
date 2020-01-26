@@ -53,6 +53,8 @@ pub enum CMD {
     PauseTube,
     #[strum(to_string = "list-tubes-watched")]
     ListTubesWatched,
+    #[strum(to_string = "list-tubes")]
+    ListTubes,
     #[strum(to_string = "list-tube-used")]
     ListTubeUsed,
 }
@@ -81,6 +83,7 @@ impl Clone for CMD {
             CMD::PeekBuried => CMD::PeekBuried,
             CMD::PauseTube => CMD::PauseTube,
             CMD::ListTubesWatched => CMD::ListTubesWatched,
+            CMD::ListTubes => CMD::ListTubes,
             CMD::ListTubeUsed => CMD::ListTubeUsed,
         }
     }
@@ -211,6 +214,9 @@ impl Command {
                 }
                 CMD::Reserve | CMD::ReserveWithTimeout => {
                     return (true, format!("RESERVED {} {}", self.job.id(), self.job.bytes));
+                }
+                CMD::ListTubes => {
+                    return (true, format!("OK {}", self.yaml.as_ref().unwrap().len()));
                 }
                 CMD::ListTubesWatched => {
                     return (true, format!("OK {}", self.yaml.as_ref().unwrap().len()));

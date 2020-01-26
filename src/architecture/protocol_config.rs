@@ -128,6 +128,12 @@ lazy_static! {
             waiting_for_more: false,
             params: vec![],
         });
+        m.insert(CMD::ListTubes.to_string(), CommandParseOptions{
+            name: CMD::ListTubes,
+            expected_length: 1,
+            waiting_for_more: false,
+            params: vec![],
+        });
         m.insert(CMD::ListTubeUsed.to_string(), CommandParseOptions{
             name: CMD::ListTubeUsed,
             expected_length: 1,

@@ -82,6 +82,10 @@ impl Dispatch {
         }
     }
 
+    pub fn list_tubes(&self) -> (usize, Vec<String>) {
+        (self.cmd_tx.len(), self.cmd_tx.keys().map(|key|key.clone()).collect())
+    }
+
     fn task(&mut self, tube_name: String, mut tube_rx: InnerReceiver, mut cmd_rx: TubeReceiver) {
         task::spawn(async move {
             // TODO Optimize

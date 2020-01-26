@@ -39,7 +39,7 @@
 - [ ] stats-job
 - [ ] stats-tube
 - [ ] stats
-- [ ] list-tubes
-- [ ] list-tube-used
+- [x] list-tubes
+- [x] list-tube-used
 - [x] list-tubes-watched
 - [x] pause-tube
