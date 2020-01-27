@@ -1,3 +1,5 @@
+![build](https://github.com/laohanlinux/beanstalkr/workflows/build/badge.svg)
+
 # beanstalkr
 
 ``` action
