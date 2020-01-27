@@ -17,6 +17,7 @@ mod backup;
 mod operation;
 mod channel;
 
+use structopt::StructOpt;
 use chrono::prelude::*;
 use async_std::prelude::*;
 use async_std::task;
@@ -33,6 +34,17 @@ use crate::operation::dispatch::Dispatch;
 
 use std::process;
 
+/// A basic example
+#[derive(StructOpt, Debug)]
+#[structopt(name = "basic")]
+struct Opt {
+    #[structopt(short, long, parse(from_occurrences))]
+    verbose: u8,
+
+    #[structopt(short, long, default_value = "127.0.0.1:11300")]
+    addr: String,
+}
+
 fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
     ctrlc::set_handler(move || {
@@ -40,10 +52,11 @@ fn main() -> io::Result<()> {
         process::exit(0);
     });
 
+    let opt: Opt = Opt::from_args();
     task::block_on(async move {
-        let listener = TcpListener::bind("127.0.0.1:8080").await?;
-        info!("Listening on {}", listener.local_addr()?);
+        let listener = TcpListener::bind(opt.addr).await?;
         let mut incoming = listener.incoming();
+        info!("Listening on {}", listener.local_addr()?);
         let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
         while let Some(stream) = incoming.next().await {
             let stream = stream?;
