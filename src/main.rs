@@ -42,7 +42,7 @@ struct Opt {
     #[structopt(short, long, parse(from_occurrences))]
     verbose: u8,
 
-    #[structopt(short, long, default_value = "127.0.0.1:11300")]
+    #[structopt(short, long, default_value = ":11300")]
     addr: String,
 }
 
