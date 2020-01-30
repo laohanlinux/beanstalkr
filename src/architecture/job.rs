@@ -131,12 +131,15 @@ impl Job {
     }
 }
 
+use std::time::SystemTime;
+
 impl PriorityQueueItem for Job {
     fn key(&self) -> i64 {
+        let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos() as i64;
         match self.state {
             State::Ready => self.private,
-            State::Delayed => self.delay * NANO - (Local::now().timestamp_nanos() - self.started_delay_at),
-            State::Reserved => self.ttr * NANO - (Local::now().timestamp_nanos() - self.started_ttr_at),
+            State::Delayed => self.delay * NANO - (timestamp - self.started_delay_at),
+            State::Reserved => self.ttr * NANO - (timestamp - self.started_ttr_at),
             _ => 0,
         }
     }

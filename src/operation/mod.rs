@@ -294,6 +294,21 @@ mod test {
     }
 
     #[test]
+    fn it_delete2() {
+        let mut conn = connect();
+        conn.use_tube("a");
+//        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        for i in 0..100 {
+            let job = conn.reserve().unwrap();
+            let id = job.id();
+            println!("{}", id);
+            let b = conn.delete(id).is_ok();
+//            assert!(b);
+        }
+
+
+    }
+    #[test]
     fn it_kick() {
         let mut conn = connect();
         let tube = format!("tube_{}", Local::now().timestamp_nanos());

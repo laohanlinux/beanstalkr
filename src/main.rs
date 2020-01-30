@@ -32,6 +32,7 @@ use crate::operation::ClientHandler;
 use crate::architecture::tube::Tube;
 use crate::operation::dispatch::Dispatch;
 
+use std::fs::File;
 use std::process;
 
 /// A basic example
@@ -47,8 +48,13 @@ struct Opt {
 
 fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
+    let guard = pprof::ProfilerGuard::new(100).unwrap();
     ctrlc::set_handler(move || {
         info!("beanstalkr exit");
+        if let Ok(report) = guard.report().build() {
+            let file = File::create("flamegraph.svg").unwrap();
+            report.flamegraph(file).unwrap();
+        };
         process::exit(0);
     });
 
