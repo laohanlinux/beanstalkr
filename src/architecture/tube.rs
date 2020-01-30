@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 use failure::{self, bail, Fail, Error, err_msg};
 use downcast_rs::impl_downcast;
@@ -24,13 +24,14 @@ pub trait PriorityQueue<Item: PriorityQueueItem> {
     fn find(&self, id: &Id) -> Option<&Item>;
     fn remove(&mut self, id: &Id) -> Option<Item>;
     fn len(&self) -> usize;
+    fn set_time(&mut self);
 }
 
 pub type Id = u64;
 pub type ClientId = u64;
 
 pub trait PriorityQueueItem: Downcast {
-    fn key(&self) -> i64;
+    fn key(&self, now: Option<i64>) -> i64;
     fn id(&self) -> &Id;
     fn timestamp(&self) -> i64;
     fn enqueue(&mut self);
@@ -78,19 +79,25 @@ impl<J, A> Tube<J, A> where
     }
 
     pub async fn process(&mut self) {
-        self.process_delayed_queue(MAX_JOB_PER_ITERATION).await;
+        self.process_delayed_queue(MAX_JOB_PER_ITERATION);
         self.process_reserved_queue(MAX_JOB_PER_ITERATION).await;
         self.process_ready_queue(MAX_JOB_PER_ITERATION).await;
     }
 
-    pub async fn process_delayed_queue(&mut self, mut limit: usize) {
+    pub fn process_delayed_queue(&mut self, mut limit: usize) {
         debug!("{}, delayed queue _size: {}", self.name, self.delayed.len());
-        while self.delayed.peek().is_some() && self.delayed.peek().unwrap().key() <= 0 && limit > 0 {
-            let mut delayed_job = self.delayed.dequeue().unwrap();
-            debug!("job:{} from {} to {}", delayed_job.id(), delayed_job.state(), State::Ready);
-            delayed_job.set_state(State::Ready).unwrap();
-            self.ready.enqueue(delayed_job);
-            limit -= 1;
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64;
+        while let Some(mut delayed_job) = self.delayed.dequeue() {
+            if delayed_job.key(Some(timestamp)) <= 0 && limit > 0 {
+                //let mut delayed_job = self.delayed.dequeue().unwrap();
+                debug!("job:{} from {} to {}", delayed_job.id(), delayed_job.state(), State::Ready);
+                delayed_job.set_state(State::Ready).unwrap();
+                self.ready.enqueue(delayed_job);
+                limit -= 1;
+            } else {
+                self.delayed.enqueue(delayed_job);
+                break;
+            }
         }
     }
 
@@ -100,20 +107,24 @@ impl<J, A> Tube<J, A> where
             debug!("tube: {}, wait {} for pause tube", self.name, self.pause_tube_time - tm);
             return;
         }
-        debug!("{}, reserve queue _size: {}", self.name, self.reserved.len());
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64;
+        info!("{}, reserve queue _size: {}", self.name, self.reserved.len());
         // 将reserved队列的超时Job，转为ready队列（比如：客户端获取到一个job，但是在规定的时间内，服务端并未收到ack，即处理超时）
-        while self.reserved.peek().is_some() && self.reserved.peek().unwrap().key() <= 0 && limit > 0 {
-            let mut reserved_job = self.reserved.dequeue().unwrap();
-            debug!("job:{} from {} to {}", reserved_job.id(), reserved_job.state(), State::Ready);
-            reserved_job.set_state(State::Ready).unwrap();
-            self.ready.enqueue(reserved_job);
-            limit -= 1;
+        while let Some(job) = self.reserved.peek() {
+            if job.key(Some(timestamp)) <= 0 && limit > 0 {
+                let mut reserved_job = self.reserved.dequeue().unwrap();
+                //debug!("job:{} from {} to {}", reserved_job.id(), reserved_job.state(), State::Ready);
+                reserved_job.set_state(State::Ready).unwrap();
+                self.ready.enqueue(reserved_job);
+                limit -= 1;
+            } else {
+                break;
+            }
         }
     }
 
     pub async fn process_ready_queue(&mut self, mut limit: usize) {
-        // 必须有已连接的客户端以及ready队列不为空
-        debug!("{}, ready queue len: {}, client: {},", self.name, self.ready.len(), self.awaiting_clients.len());
+        info!("{}, ready queue len: {}, client: {},", self.name, self.ready.len(), self.awaiting_clients.len());
         while self.awaiting_clients.peek().is_some() && self.ready.peek().is_some() && limit > 0 {
             let mut awaiting_client_connection = self.awaiting_clients.dequeue().unwrap();
             let mut ready_job = self.ready.dequeue().unwrap();

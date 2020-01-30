@@ -122,7 +122,6 @@ impl ClientHandler {
     async fn handle_base_command(&mut self, mut command: Command) -> Result<Command, Error> {
         let cmd = CMD::from_str(&command.name).unwrap();
         let tube_name = command.params.get("tube").unwrap();
-        debug!("client handler handle command: {:?}, tube: {:?}", tube_name, command);
         match cmd {
             CMD::Use => {
                 self.use_tube = tube_name.clone();
@@ -180,22 +179,7 @@ impl ClientHandler {
                     });
                     debug!("send a reserve inner command to {}", tube_name);
                 }
-                let conn = self.conn.clone();
-                let rx = self.reserve_rx.clone();
-                loop {
-                    let mut buffer = vec![0; 1];
-                    select! {
-                        // FIXME: use other way to do that?
-                        n = conn.peek(&mut buffer).fuse() => {
-                            if n.is_err() || n.unwrap() == 0 {
-                                return Err(err_msg("Client Quit"));
-                            }
-                        }
-                        command = rx.recv().fuse() => {
-                            return Ok(command.unwrap());
-                        }
-                    }
-                }
+                Ok(self.reserve_rx.recv().await.unwrap())
             }
             CMD::ListTubesWatched => {
                 let lists: Vec<String> = self.watch_tubes.keys().map(|key| key.clone()).collect();
@@ -233,9 +217,9 @@ impl ClientHandler {
 mod test {
     use super::*;
     use beanstalkc::Beanstalkc;
-    use std::thread::{self, sleep};
+    use std::thread::{self, sleep, Thread};
     use chrono::Local;
-    use std::time::{Duration, Instant, SystemTime};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn it_async() {
@@ -339,9 +323,25 @@ mod test {
         assert_eq!(tube_name, "hello".to_string());
     }
 
+    #[test]
+    fn it_batch_put() {
+        for i in 0..100 {
+            let mut conn = connect();
+            println!("-->{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+            for i in 0..100 {
+                let id = conn.put(b"hello", 1, Duration::from_secs(i) / 13, Duration::from_secs(5)).unwrap();
+                println!("{}", id);
+            }
+            println!("<--{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+        }
+        thread::spawn(move || {
+
+        });
+
+    }
     fn connect() -> Beanstalkc {
         Beanstalkc::new()
-            .host("localhost")
+            .host("127.0.0.1")
             .port(11300)
             .connection_timeout(Some(Duration::from_secs(3)))
             .connect().expect("connect failed")

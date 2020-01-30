@@ -83,7 +83,7 @@ impl Dispatch {
     }
 
     pub fn list_tubes(&self) -> (usize, Vec<String>) {
-        (self.cmd_tx.len(), self.cmd_tx.keys().map(|key|key.clone()).collect())
+        (self.cmd_tx.len(), self.cmd_tx.keys().map(|key| key.clone()).collect())
     }
 
     fn task(&mut self, tube_name: String, mut tube_rx: InnerReceiver, mut cmd_rx: TubeReceiver) {
@@ -91,13 +91,18 @@ impl Dispatch {
             // TODO Optimize
             let mut clients: HashMap<ClientId, (CmdSender, OnceChannel<Command>)> = HashMap::new();
             let mut tube: Tube<MinHeap<Job>, MinHeap<AwaitingClient>> = Tube::new(tube_name.clone(), MinHeap::new("".to_string()), MinHeap::new("".to_string()), MinHeap::new("".to_string()), MinHeap::new("".to_string()), MinHeap::new("".to_string()));
-            let mut interval = stream::interval(Duration::from_millis(100));
+            let mut interval = stream::interval(Duration::from_millis(50));
+            let (mut _tx, mut _rx) = mpsc::unbounded::<()>();
             loop {
                 select! {
                         _ = interval.next().fuse() => {
                             tube.process().await;
                             tube.process_timed_clients().await;
                         },
+                        _ = _rx.next().fuse() => {
+                            tube.process().await;
+                            tube.process_timed_clients().await;
+                        }
                         cmd = tube_rx.next().fuse() => match cmd {
                             Some(cmd) => {
                                 match cmd {
@@ -123,6 +128,10 @@ impl Dispatch {
                         cmd = cmd_rx.next().fuse() => match cmd {
                             Some(command) => {
                                  Self::handle_command(&mut clients, &mut tube, command.clone()).await;
+                                 let cmd = CMD::from_str(&command.1.name).unwrap();
+                                 if cmd == CMD::ReserveWithTimeout || cmd == CMD::Reserve{
+                                    _tx.send(()).await;
+                                 }
                             },
                             None =>{},
                         }
@@ -134,106 +143,105 @@ impl Dispatch {
     async fn handle_command<J: PriorityQueue<Job> + Send + 'static,
         A: PriorityQueue<AwaitingClient> + Send + 'static>(clients: &mut HashMap<ClientId, (CmdSender, OnceChannel<Command>)>, tube: &mut Tube<J, A>, mut command: (ClientId, Command)) {
         let cmd = CMD::from_str(&command.1.name).unwrap();
-        let (ref mut tx, ref reserve_tx) = clients.get_mut(&command.0).unwrap();
-        match cmd {
-            CMD::Put => {
-                tube.put(command.1.clone()).unwrap();
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::Reserve => {
-                debug!("reserve a job");
-                tube.reserve(command.0.clone(), command.1.clone(), reserve_tx.clone()).unwrap();
-            }
-            CMD::ReserveWithTimeout => {
-                debug!("reserve timeout a job");
-                tube.reserve_with_timeout(command.0.clone(), command.1.clone(), reserve_tx.clone()).unwrap();
-            }
-            CMD::Delete => {
-                // delete buried, reserved
-                command.1.err = tube.delete(&command.1);
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::Release => {
-                command.1.err = tube.release(&command.1);
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::Bury => {
-                command.1.err = tube.buried(&command.1);
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::Kick => {
-                match tube.kick(&command.1) {
-                    Ok(count) => {
-                        debug!("Count {}", count);
-                        command.1.params.insert("count".to_string(), format!("{}", count));
-                    }
-                    Err(err) => {
-                        command.1.err = Err(err);
-                    }
+        if let Some((ref mut tx, ref reserve_tx)) = clients.get_mut(&command.0) {
+            match cmd {
+                CMD::Put => {
+                    tube.put(command.1.clone()).unwrap();
+                    tx.send(command.1).await.unwrap();
                 }
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::KickJob => {
-                command.1.err = tube.kick_job(&command.1);
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::PauseTube => {
-                command.1.err = tube.pause_tube(&command.1);
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::Touch => {
-                command.1.err = tube.touch(&command.1).map(|_| ());
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::Peek => {
-                match tube.peek(&command.1) {
-                    Ok(job) => {
-                        command.1.job = job.clone();
-                    }
-                    Err(err) => {
-                        command.1.err = Err(err);
-                    }
+                CMD::Reserve => {
+                    tube.reserve(command.0.clone(), command.1.clone(), reserve_tx.clone()).unwrap();
                 }
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::PeekReady => {
-                match tube.peek_ready() {
-                    Ok(job) => {
-                        command.1.job = job.clone();
-                    }
-                    Err(err) => {
-                        command.1.err = Err(err);
-                    }
+                CMD::ReserveWithTimeout => {
+                    tube.reserve_with_timeout(command.0.clone(), command.1.clone(), reserve_tx.clone()).unwrap();
                 }
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::PeekDelayed => {
-                match tube.peek_delayed() {
-                    Ok(job) => {
-                        command.1.job = job.clone();
-                    }
-                    Err(err) => {
-                        command.1.err = Err(err);
-                    }
+                CMD::Delete => {
+                    // delete buried, reserved
+                    command.1.err = tube.delete(&command.1);
+                    tx.send(command.1).await.unwrap();
                 }
-                tx.send(command.1).await.unwrap();
-            }
-            CMD::PeekBuried => {
-                match tube.peek_buried() {
-                    Ok(job) => {
-                        command.1.job = job.clone();
-                    }
-                    Err(err) => {
-                        command.1.err = Err(err);
-                    }
+                CMD::Release => {
+                    command.1.err = tube.release(&command.1);
+                    tx.send(command.1).await.unwrap();
                 }
-                tx.send(command.1).await.unwrap();
+                CMD::Bury => {
+                    command.1.err = tube.buried(&command.1);
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::Kick => {
+                    match tube.kick(&command.1) {
+                        Ok(count) => {
+                            debug!("Count {}", count);
+                            command.1.params.insert("count".to_string(), format!("{}", count));
+                        }
+                        Err(err) => {
+                            command.1.err = Err(err);
+                        }
+                    }
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::KickJob => {
+                    command.1.err = tube.kick_job(&command.1);
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::PauseTube => {
+                    command.1.err = tube.pause_tube(&command.1);
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::Touch => {
+                    command.1.err = tube.touch(&command.1).map(|_| ());
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::Peek => {
+                    match tube.peek(&command.1) {
+                        Ok(job) => {
+                            command.1.job = job.clone();
+                        }
+                        Err(err) => {
+                            command.1.err = Err(err);
+                        }
+                    }
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::PeekReady => {
+                    match tube.peek_ready() {
+                        Ok(job) => {
+                            command.1.job = job.clone();
+                        }
+                        Err(err) => {
+                            command.1.err = Err(err);
+                        }
+                    }
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::PeekDelayed => {
+                    match tube.peek_delayed() {
+                        Ok(job) => {
+                            command.1.job = job.clone();
+                        }
+                        Err(err) => {
+                            command.1.err = Err(err);
+                        }
+                    }
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::PeekBuried => {
+                    match tube.peek_buried() {
+                        Ok(job) => {
+                            command.1.job = job.clone();
+                        }
+                        Err(err) => {
+                            command.1.err = Err(err);
+                        }
+                    }
+                    tx.send(command.1).await.unwrap();
+                }
+                CMD::Ignore => {
+                    tube.ignore(&command.0);
+                    tx.send(command.1).await.unwrap();
+                }
+                _ => unreachable!()
             }
-            CMD::Ignore => {
-                tube.ignore(&command.0);
-                tx.send(command.1).await.unwrap();
-            }
-            _ => unreachable!()
         }
     }
 

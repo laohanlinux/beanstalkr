@@ -126,17 +126,18 @@ impl Command {
         let mut ttr = self.params.get("ttr").unwrap().parse::<i64>()?;
         let bytes = self.params.get("bytes").unwrap().parse::<i64>()?;
         let id = random_factory();
+        let data = self.params.get("data").unwrap();
 
         if ttr <= 0 {
             ttr = 1;
         }
         if bytes > MaxJobSize {
-            return Err(err_msg(ProtocolError::JobTooBig));
+            return Err(ProtocolError::JobTooBig.into());
         }
-        if bytes != self.params.get("data").unwrap().len() as i64 {
+        if bytes != data.len() as i64 {
             return Err(err_msg(ProtocolError::BadFormat));
         }
-        self.job = Job::new(id, pri, delay, ttr, bytes, self.params.get("data").unwrap().to_string());
+        self.job = Job::new(id, pri, delay, ttr, bytes, data.clone());
         debug!("create new job from params: {:?}", self.job.id());
         Ok(())
     }
@@ -171,13 +172,12 @@ impl Command {
                 self.params.insert(param_name.to_string(), parts[i + 1].clone().to_string());
             }
 
-            debug!("PROTOCOL command after parsing {:?}", self);
-
+//            debug!("PROTOCOL command after parsing {:?}", self);
             return Ok(!self.not_complete_received);
         }
 
         // 解析第2轮命令
-        debug!("GOT MORE {:?}", self);
+//        debug!("GOT MORE {:?}", self);
         if self.name == CMD::Put.to_string() {
             self.params.insert("data".to_owned(), raw_command.to_owned());
             self.raw_command = raw_command.to_owned() + "\r\n";

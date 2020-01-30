@@ -1,7 +1,7 @@
 #![feature(const_if_match)]
 #![feature(const_fn)]
 #![feature(associated_type_bounds)]
-#![recursion_limit = "256"]
+#![recursion_limit="512"]
 
 #[macro_use]
 extern crate lazy_static;
@@ -42,19 +42,14 @@ struct Opt {
     #[structopt(short, long, parse(from_occurrences))]
     verbose: u8,
 
-    #[structopt(short, long, default_value = ":11300")]
+    #[structopt(short, long, default_value = "0.0.0.0:11300")]
     addr: String,
 }
 
 fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
-    let guard = pprof::ProfilerGuard::new(100).unwrap();
     ctrlc::set_handler(move || {
         info!("beanstalkr exit");
-        if let Ok(report) = guard.report().build() {
-            let file = File::create("flamegraph.svg").unwrap();
-            report.flamegraph(file).unwrap();
-        };
         process::exit(0);
     });
 

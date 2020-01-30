@@ -30,7 +30,7 @@ pub struct Job {
 
 impl Ord for Job {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.key().cmp(&other.key())
+        self._cmd().cmp(&other._cmd())
     }
 }
 
@@ -111,6 +111,15 @@ impl Job {
         job
     }
 
+    pub fn _cmd(&self) -> i64 {
+        match self.state {
+            State::Ready => self.private,
+            State::Delayed => self.delay * NANO + self.started_delay_at,
+            State::Reserved => self.ttr * NANO + self.started_ttr_at,
+            _ => 0,
+        }
+    }
+
     // TODO Must
     pub fn set_state(&mut self, state: State) -> Result<(), Error> {
         let ok = is_valid_transitions_to(self.state.clone(), state)?;
@@ -134,8 +143,8 @@ impl Job {
 use std::time::SystemTime;
 
 impl PriorityQueueItem for Job {
-    fn key(&self) -> i64 {
-        let timestamp = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos() as i64;
+    fn key(&self, now: Option<i64>) -> i64 {
+        let timestamp = now.unwrap();
         match self.state {
             State::Ready => self.private,
             State::Delayed => self.delay * NANO - (timestamp - self.started_delay_at),
@@ -222,7 +231,7 @@ impl AwaitingClient {
 }
 
 impl PriorityQueueItem for AwaitingClient {
-    fn key(&self) -> i64 {
+    fn key(&self, _: Option<i64>) -> i64 {
         self.queued_at
     }
 
