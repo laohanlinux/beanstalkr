@@ -1,6 +1,6 @@
 #![feature(const_if_match)]
 #![feature(associated_type_bounds)]
-#![recursion_limit="512"]
+#![recursion_limit = "512"]
 
 #[macro_use]
 extern crate lazy_static;
@@ -13,23 +13,24 @@ extern crate log;
 mod architecture;
 mod backend;
 mod backup;
-mod operation;
 mod channel;
+mod operation;
+mod types;
 
-use structopt::StructOpt;
-use chrono::prelude::*;
-use async_std::prelude::*;
-use async_std::task;
 use async_std::io;
 use async_std::net::{TcpListener, TcpStream};
+use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex};
-use failure::{self, Fail, Error, err_msg};
+use async_std::task;
+use chrono::prelude::*;
 use env_logger::fmt::Target;
+use failure::{self, err_msg, Error, Fail};
+use structopt::StructOpt;
 
 use crate::architecture::cmd::Command;
-use crate::operation::ClientHandler;
 use crate::architecture::tube::Tube;
 use crate::operation::dispatch::Dispatch;
+use crate::operation::ClientHandler;
 
 use std::fs::File;
 use std::process;
@@ -50,7 +51,8 @@ fn main() -> io::Result<()> {
     ctrlc::set_handler(move || {
         info!("beanstalkr exit");
         process::exit(0);
-    }).expect("TODO: panic message");
+    })
+    .expect("TODO: panic message");
 
     let opt: Opt = Opt::from_args();
     task::block_on(async move {

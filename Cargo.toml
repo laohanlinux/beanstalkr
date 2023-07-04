@@ -26,6 +26,7 @@ futures-timer = "3.0.2"
 ctrlc = { version = "3.4.0", features = ["termination"] }
 serde = "1.0.166"
 serde_yaml = "0.9.22"
+tokio = { version = "1.29.1", features = ["full", "tracing"] }
 
 [dev-dependencies]
 beanstalkc = "1.0.0"
