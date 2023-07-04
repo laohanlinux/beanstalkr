@@ -1,6 +1,7 @@
+use async_std::channel::{self, Receiver, Sender};
+use async_std::sync::Arc;
+use failure::{self, err_msg, Error, Fail};
 use futures::future::err;
-use failure::{self, Fail, Error, err_msg};
-use async_std::sync::{channel, Arc, Sender, Receiver};
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -35,20 +36,22 @@ impl<T> OnceChannel<T> {
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
     use async_std::task;
 
     #[test]
     fn it_clone() {
         let mut runtime = task::Builder::new();
-        let mut join = runtime.spawn(async move {
-            let (tx, rx) = channel::<i32>(1);
-            let mut ch = OnceChannel::new(tx);
-            ch.send(100).await;
-            rx.recv().await;
-            println!("Hello Word");
-        }).unwrap();
+        let mut join = runtime
+            .spawn(async move {
+                let (tx, rx) = async_std::channel::bounded::<i32>(1);
+                let mut ch = OnceChannel::new(tx);
+                ch.send(100).await;
+                rx.recv().await;
+                println!("Hello Word");
+            })
+            .unwrap();
         join.task();
     }
 }

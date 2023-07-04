@@ -5,7 +5,6 @@ use chrono::Local;
 use futures::channel::mpsc::{UnboundedSender as Sender, UnboundedReceiver as Receiver};
 use uuid::Uuid;
 use std::hash::{Hash, Hasher};
-use fasthash::{metro, MetroHasher};
 use failure::{self, Fail, bail, Error, err_msg};
 
 use super::cmd::Command;
@@ -256,12 +255,11 @@ lazy_static! {
 }
 
 pub fn random_factory() -> Id {
-//    id.fetch_add(1, atomic::Ordering::SeqCst)
-    metro::hash64(Uuid::new_v4().as_bytes())
+    id.fetch_add(1, atomic::Ordering::SeqCst)
 }
 
 pub fn random_clients() -> Id {
-    metro::hash64(Uuid::new_v4().as_bytes())
+   random_factory()
 }
 
 #[cfg(test)]

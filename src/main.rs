@@ -1,5 +1,4 @@
 #![feature(const_if_match)]
-#![feature(const_fn)]
 #![feature(associated_type_bounds)]
 #![recursion_limit="512"]
 
@@ -51,7 +50,7 @@ fn main() -> io::Result<()> {
     ctrlc::set_handler(move || {
         info!("beanstalkr exit");
         process::exit(0);
-    });
+    }).expect("TODO: panic message");
 
     let opt: Opt = Opt::from_args();
     task::block_on(async move {
