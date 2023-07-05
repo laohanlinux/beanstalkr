@@ -43,7 +43,8 @@ mod tests {
     async fn it_clone() {
         let (tx, mut rx) = channel::<i32>(1);
         let mut ch = OnceChannel::new(tx);
-        ch.send(100).await;
+        ch.open();
+        ch.send(100).await.expect("TODO: panic message");
         rx.recv().await;
         println!("Hello Word");
     }

@@ -20,6 +20,7 @@ use dispatch::Dispatch;
 use dispatch::TubeSender;
 use downcast_rs::Downcast;
 use failure::_core::iter::once;
+use futures::SinkExt;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -28,7 +29,6 @@ use tokio::spawn;
 use tokio::sync::mpsc::{channel, unbounded_channel};
 use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::codec::{Framed, LinesCodec};
-use futures::SinkExt;
 
 pub struct ClientHandler {
     client_id: ClientId,
@@ -65,6 +65,7 @@ impl ClientHandler {
         }
     }
 
+    // Spawn a new coroutine go handle the client connection
     pub async fn spawn_start(&mut self) -> Result<(), Error> {
         // register
         self.handle_base_command(Command::default()).await.unwrap();
@@ -130,8 +131,8 @@ impl ClientHandler {
                 if self.tube_rx.contains_key(tube_name) {
                     return Ok(command);
                 }
-                let mut dispatch: MutexGuard<Dispatch> = self.dispatch.lock().await;
                 let tx = self.tx.as_ref().unwrap();
+                let mut dispatch: MutexGuard<Dispatch> = self.dispatch.lock().await;
                 let tube_ch = dispatch
                     .spawn_tube(
                         tube_name.clone(),
@@ -251,7 +252,6 @@ mod test {
     use chrono::Local;
     use std::thread::{self, sleep, Thread};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
 
     #[test]
     fn it_double_tube() {

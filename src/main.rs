@@ -49,7 +49,7 @@ struct Opt {
 async fn main() -> std::io::Result<()> {
     pretty_env_logger::init_timed();
     ctrlc::set_handler(move || {
-        info!("beanstalkr exit");
+        info!("BeanstalkR exit");
         process::exit(0);
     })
         .expect("TODO: panic message");
