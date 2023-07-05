@@ -1,7 +1,7 @@
-use futures::{channel::mpsc};
+pub type UnBoundedSender<T> = tokio::sync::mpsc::UnboundedSender<T>;
+pub type UnBoundedReceiver<T> = tokio::sync::mpsc::UnboundedReceiver<T>;
+pub type Sender<T> = tokio::sync::mpsc::Sender<T>;
+pub type Receiver<T> = tokio::sync::mpsc::Receiver<T>;
 
-pub type Sender<T> = mpsc::UnboundedSender<T>;
-pub type Receiver<T> = mpsc::UnboundedReceiver<T>;
-
-pub type SenderReceiver<T> = mpsc::UnboundedSender<mpsc::Receiver<T>>;
-pub type ReceiverSender<T> = mpsc::UnboundedSender<mpsc::Sender<T>>;
+pub type SenderReceiver<T> = tokio::sync::mpsc::UnboundedReceiver<tokio::sync::mpsc::Receiver<T>>;
+pub type ReceiverSender<T> = tokio::sync::mpsc::UnboundedReceiver<tokio::sync::mpsc::Sender<T>>;

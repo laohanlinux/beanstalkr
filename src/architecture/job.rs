@@ -2,7 +2,6 @@ use std::time::{Instant, Duration};
 use std::sync::{Arc, atomic::{self, AtomicU64}};
 use std::cmp::Ordering;
 use chrono::Local;
-use futures::channel::mpsc::{UnboundedSender as Sender, UnboundedReceiver as Receiver};
 use uuid::Uuid;
 use std::hash::{Hash, Hasher};
 use failure::{self, Fail, bail, Error, err_msg};

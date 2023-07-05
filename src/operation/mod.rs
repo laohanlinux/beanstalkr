@@ -1,11 +1,3 @@
-use async_std::channel::{self, Receiver, Sender};
-use async_std::io::{self, BufReader};
-use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
-use async_std::stream;
-use async_std::sync::{Arc, Mutex, MutexGuard};
-use async_std::task;
-
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,10 +5,7 @@ use std::time::Duration;
 
 use crate::architecture::cmd::{Command, CMD};
 use failure::{err_msg, Error, Fail};
-use futures::{
-    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    select, FutureExt, SinkExt,
-};
+
 use uuid::Uuid;
 
 pub mod dispatch;
@@ -25,19 +14,29 @@ pub mod once_channel;
 use crate::architecture::error::ProtocolError;
 use crate::architecture::job::random_clients;
 use crate::architecture::tube::ClientId;
+use crate::channel::{Receiver, UnBoundedReceiver, UnBoundedSender};
 use crate::operation::once_channel::OnceChannel;
 use dispatch::Dispatch;
 use dispatch::TubeSender;
+use downcast_rs::Downcast;
 use failure::_core::iter::once;
 use std::borrow::Cow;
+use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::spawn;
+use tokio::sync::mpsc::{channel, unbounded_channel};
+use tokio::sync::{Mutex, MutexGuard};
+use tokio_util::codec::{Framed, LinesCodec};
+use futures::SinkExt;
 
 pub struct ClientHandler {
     client_id: ClientId,
     use_tube: String,
-    conn: Arc<TcpStream>,
+    conn: Framed<TcpStream, LinesCodec>,
     dispatch: Arc<Mutex<Dispatch>>,
-    tx: Option<UnboundedSender<Command>>,
-    rx: Option<UnboundedReceiver<Command>>,
+    tx: Option<UnBoundedSender<Command>>,
+    rx: Option<UnBoundedReceiver<Command>>,
     tube_rx: HashMap<String, TubeSender>,
     reserve_tx: OnceChannel<Command>,
     reserve_rx: Receiver<Command>,
@@ -45,9 +44,9 @@ pub struct ClientHandler {
 }
 
 impl ClientHandler {
-    pub fn new(conn: Arc<TcpStream>, dispatch: Arc<Mutex<Dispatch>>) -> Self {
-        let (tx, rx) = mpsc::unbounded();
-        let (reserve_tx, reserve_rx) = async_std::channel::bounded(1);
+    pub fn new(conn: Framed<TcpStream, LinesCodec>, dispatch: Arc<Mutex<Dispatch>>) -> Self {
+        let (tx, rx) = unbounded_channel();
+        let (reserve_tx, reserve_rx) = channel(1);
         let once_channel = OnceChannel::new(reserve_tx);
         let mut watch_tubes = HashMap::new();
         watch_tubes.insert("default".to_string(), ());
@@ -75,13 +74,16 @@ impl ClientHandler {
         ret
     }
 
+    // Parse client command ASCII protocol
     async fn parse_command(&mut self) -> Result<(), Error> {
-        let conn = self.conn.clone();
-        let reader = BufReader::new(&*conn);
-        let mut lines = reader.lines();
+        use tokio_stream::StreamExt;
         let mut command: Command = Default::default();
-        while let Some(line) = lines.next().await {
-            let line = line?;
+        while let Some(line) = self.conn.next().await {
+            if line.is_err() {
+                info!("failed to read line command, {}", line.unwrap_err());
+                continue;
+            }
+            let line = line.unwrap();
             debug!("read a new command: {}", line);
             match command.parse(line.as_ref()) {
                 Ok(true) => {
@@ -102,11 +104,10 @@ impl ClientHandler {
     }
 
     async fn handle_reply(&mut self, command: &mut Command) -> Result<(), Error> {
-        let stream = self.conn.clone();
-        let mut writer = &*stream;
         loop {
             let (more, reply) = command.reply().await;
-            writer.write_all((reply + "\r\n").as_bytes()).await?;
+            self.conn.send(&reply).await?;
+            // writer.write_all((reply + "\r\n").as_bytes()).await?;
             if !more {
                 break;
             }
@@ -115,9 +116,7 @@ impl ClientHandler {
     }
 
     async fn handle_reply_err(&mut self, err: Error) -> Result<(), Error> {
-        let stream = self.conn.clone();
-        let mut writer = &*stream;
-        writer.write_all(format!("{}\r\n", err).as_bytes()).await?;
+        self.conn.send( &err.to_string()).await?;
         Ok(())
     }
 
@@ -184,10 +183,9 @@ impl ClientHandler {
                 let tube_tx = self.tube_rx.get_mut(&self.use_tube).unwrap();
                 tube_tx
                     .send((self.client_id.clone(), command.clone()))
-                    .await
                     .unwrap();
                 let rx = self.rx.as_mut().unwrap();
-                let mut command: Command = rx.next().await.unwrap();
+                let mut command: Command = rx.recv().await.unwrap();
                 command
                     .params
                     .insert("count".to_owned(), format!("{}", count));
@@ -201,8 +199,8 @@ impl ClientHandler {
                     let tube_ch = self.tube_rx.get_mut(tube_name).unwrap();
                     let mut tube_ch = tube_ch.clone();
                     let command = command.clone();
-                    task::spawn(async move {
-                        tube_ch.send((client_id, command)).await.unwrap();
+                    spawn(async move {
+                        tube_ch.send((client_id, command)).unwrap();
                     });
                     debug!("send a reserve inner command to {}", tube_name);
                 }
@@ -235,10 +233,9 @@ impl ClientHandler {
                 let tube_tx = self.tube_rx.get_mut(&self.use_tube).unwrap();
                 tube_tx
                     .send((self.client_id.clone(), command.clone()))
-                    .await
                     .unwrap();
                 let rx = self.rx.as_mut().unwrap();
-                let command = rx.next().await.unwrap();
+                let command = rx.recv().await.unwrap();
                 Ok(command)
             }
         }
@@ -253,13 +250,6 @@ mod test {
     use std::thread::{self, sleep, Thread};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    #[test]
-    fn it_async() {
-        task::spawn(async move {});
-        task::block_on(async move {
-            println!("Hello");
-        });
-    }
 
     #[test]
     fn it_double_tube() {

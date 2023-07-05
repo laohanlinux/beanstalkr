@@ -17,11 +17,6 @@ mod channel;
 mod operation;
 mod types;
 
-use async_std::io;
-use async_std::net::{TcpListener, TcpStream};
-use async_std::prelude::*;
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
 use chrono::prelude::*;
 use env_logger::fmt::Target;
 use failure::{self, err_msg, Error, Fail};
@@ -34,6 +29,10 @@ use crate::operation::ClientHandler;
 
 use std::fs::File;
 use std::process;
+use std::sync::Arc;
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio_util::codec::{Framed, LinesCodec};
 
 /// A basic example
 #[derive(StructOpt, Debug)]
@@ -46,30 +45,31 @@ struct Opt {
     addr: String,
 }
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     pretty_env_logger::init_timed();
     ctrlc::set_handler(move || {
         info!("beanstalkr exit");
         process::exit(0);
     })
-    .expect("TODO: panic message");
+        .expect("TODO: panic message");
 
     let opt: Opt = Opt::from_args();
-    task::block_on(async move {
-        let listener = TcpListener::bind(opt.addr).await?;
-        let mut incoming = listener.incoming();
-        info!("Listening on {}", listener.local_addr()?);
-        let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
-            let dispatch = dispatch.clone();
-            task::spawn(async move {
-                let mut client = ClientHandler::new(Arc::new(stream), dispatch.clone());
-                if let Err(err) = client.spawn_start().await {
-                    error!("spawn start: {}", err);
-                }
-            });
-        }
-        Ok(())
-    })
+    let listener = tokio::net::TcpListener::bind(opt.addr).await?;
+    info!("Listening on {}", listener.local_addr()?);
+
+    let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
+
+    while let Ok((stream, addr)) = listener.accept().await {
+        let dispatch = dispatch.clone();
+        spawn(async move {
+            let mut client =
+                ClientHandler::new(Framed::new(stream, LinesCodec::new()), dispatch.clone());
+            if let Err(err) = client.spawn_start().await {
+                error!("spawn start: {}", err);
+            }
+        });
+    }
+
+    Ok(())
 }
