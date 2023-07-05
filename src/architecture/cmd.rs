@@ -10,7 +10,7 @@ use crate::architecture::protocol_config::{CommandParseOptions, CommandReplyOpti
 use crate::architecture::error::ProtocolError;
 
 #[allow(dead_code)]
-#[derive(Debug, Eq, PartialEq, EnumString, ToString, EnumCount, EnumDiscriminants)]
+#[derive(Debug, Eq, PartialEq, EnumString, Display, EnumCount, EnumDiscriminants)]
 pub enum CMD {
     #[strum(to_string = "use")]
     Use,
@@ -92,7 +92,9 @@ const MaxJobSize: i64 = 65536;
 
 #[derive(Debug, Clone)]
 pub struct Command {
+    // eg: default
     pub(crate) name: String,
+    // eg: use default
     pub(crate) raw_command: String,
     pub params: HashMap<String, String>,
     pub(crate) not_complete_received: bool,
@@ -102,6 +104,7 @@ pub struct Command {
     pub err: Result<(), ProtocolError>,
 }
 
+/// Create a default Command of 'use default'
 impl Default for Command {
     fn default() -> Self {
         let mut params = HashMap::new();

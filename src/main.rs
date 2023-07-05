@@ -1,7 +1,6 @@
 #![feature(const_if_match)]
-#![feature(const_fn)]
 #![feature(associated_type_bounds)]
-#![recursion_limit="512"]
+#![recursion_limit = "512"]
 
 #[macro_use]
 extern crate lazy_static;
@@ -14,26 +13,26 @@ extern crate log;
 mod architecture;
 mod backend;
 mod backup;
-mod operation;
 mod channel;
+mod operation;
+mod types;
 
-use structopt::StructOpt;
 use chrono::prelude::*;
-use async_std::prelude::*;
-use async_std::task;
-use async_std::io;
-use async_std::net::{TcpListener, TcpStream};
-use async_std::sync::{Arc, Mutex};
-use failure::{self, Fail, Error, err_msg};
 use env_logger::fmt::Target;
+use failure::{self, err_msg, Error, Fail};
+use structopt::StructOpt;
 
 use crate::architecture::cmd::Command;
-use crate::operation::ClientHandler;
 use crate::architecture::tube::Tube;
 use crate::operation::dispatch::Dispatch;
+use crate::operation::ClientHandler;
 
 use std::fs::File;
 use std::process;
+use std::sync::Arc;
+use tokio::spawn;
+use tokio::sync::Mutex;
+use tokio_util::codec::{Framed, LinesCodec};
 
 /// A basic example
 #[derive(StructOpt, Debug)]
@@ -46,29 +45,31 @@ struct Opt {
     addr: String,
 }
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     pretty_env_logger::init_timed();
     ctrlc::set_handler(move || {
-        info!("beanstalkr exit");
+        info!("BeanstalkR exit");
         process::exit(0);
-    });
+    })
+        .expect("TODO: panic message");
 
     let opt: Opt = Opt::from_args();
-    task::block_on(async move {
-        let listener = TcpListener::bind(opt.addr).await?;
-        let mut incoming = listener.incoming();
-        info!("Listening on {}", listener.local_addr()?);
-        let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
-            let dispatch = dispatch.clone();
-            task::spawn(async move {
-                let mut client = ClientHandler::new(Arc::new(stream), dispatch.clone());
-                if let Err(err) = client.spawn_start().await {
-                    error!("spawn start: {}", err);
-                }
-            });
-        }
-        Ok(())
-    })
+    let listener = tokio::net::TcpListener::bind(opt.addr).await?;
+    info!("Listening on {}", listener.local_addr()?);
+
+    let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
+
+    while let Ok((stream, addr)) = listener.accept().await {
+        let dispatch = dispatch.clone();
+        spawn(async move {
+            let mut client =
+                ClientHandler::new(Framed::new(stream, LinesCodec::new()), dispatch.clone());
+            if let Err(err) = client.spawn_start().await {
+                error!("spawn start: {}", err);
+            }
+        });
+    }
+
+    Ok(())
 }

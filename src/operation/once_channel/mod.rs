@@ -1,7 +1,7 @@
-use futures::future::err;
-use failure::{self, Fail, Error, err_msg};
-use async_std::sync::{channel, Arc, Sender, Receiver};
+use failure::{self, err_msg, Error, Fail};
+use std::sync::Arc;
 
+use crate::channel::Sender;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -27,7 +27,7 @@ impl<T> OnceChannel<T> {
     pub async fn send(&mut self, value: T) -> Result<(), Error> {
         if self.sent.compare_and_swap(false, true, Ordering::Relaxed) == false {
             debug!("Get once channel locker");
-            self.sender.send(value).await;
+            self.sender.send(value).await.unwrap();
             return Ok(());
         }
         Err(err_msg("channel has sent a value"))
@@ -35,20 +35,17 @@ impl<T> OnceChannel<T> {
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
-    use async_std::task;
+    use tokio::sync::mpsc::channel;
 
-    #[test]
-    fn it_clone() {
-        let mut runtime = task::Builder::new();
-        let mut join = runtime.spawn(async move {
-            let (tx, rx) = channel::<i32>(1);
-            let mut ch = OnceChannel::new(tx);
-            ch.send(100).await;
-            rx.recv().await;
-            println!("Hello Word");
-        }).unwrap();
-        join.task();
+    #[tokio::test]
+    async fn it_clone() {
+        let (tx, mut rx) = channel::<i32>(1);
+        let mut ch = OnceChannel::new(tx);
+        ch.open();
+        ch.send(100).await.expect("TODO: panic message");
+        rx.recv().await;
+        println!("Hello Word");
     }
 }

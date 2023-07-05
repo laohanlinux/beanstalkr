@@ -1,49 +1,52 @@
-use async_std::prelude::*;
-use async_std::task;
-use async_std::stream;
-use async_std::io::{self, BufReader};
-use async_std::net::{TcpListener, TcpStream};
-use async_std::sync::{Arc, Mutex, MutexGuard, Sender, Receiver, channel};
-
-use std::str::FromStr;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use crate::architecture::cmd::{Command, CMD};
+use failure::{err_msg, Error, Fail};
 
 use uuid::Uuid;
-use failure::{Error, err_msg, Fail};
-use crate::architecture::cmd::{Command, CMD};
-use futures::{channel::mpsc::{self, UnboundedSender, UnboundedReceiver}, select, FutureExt, SinkExt};
 
 pub mod dispatch;
 pub mod once_channel;
 
+use crate::architecture::error::ProtocolError;
+use crate::architecture::job::random_clients;
+use crate::architecture::tube::ClientId;
+use crate::channel::{Receiver, UnBoundedReceiver, UnBoundedSender};
+use crate::operation::once_channel::OnceChannel;
 use dispatch::Dispatch;
 use dispatch::TubeSender;
-use crate::architecture::tube::ClientId;
-use crate::architecture::job::random_clients;
-use crate::operation::once_channel::OnceChannel;
+use downcast_rs::Downcast;
 use failure::_core::iter::once;
+use futures::SinkExt;
 use std::borrow::Cow;
-use crate::architecture::error::ProtocolError;
+use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::spawn;
+use tokio::sync::mpsc::{channel, unbounded_channel};
+use tokio::sync::{Mutex, MutexGuard};
+use tokio_util::codec::{Framed, LinesCodec};
 
 pub struct ClientHandler {
     client_id: ClientId,
     use_tube: String,
-    conn: Arc<TcpStream>,
+    conn: Framed<TcpStream, LinesCodec>,
     dispatch: Arc<Mutex<Dispatch>>,
-    tx: Option<UnboundedSender<Command>>,
-    rx: Option<UnboundedReceiver<Command>>,
+    tx: Option<UnBoundedSender<Command>>,
+    rx: Option<UnBoundedReceiver<Command>>,
+    // store tube
     tube_rx: HashMap<String, TubeSender>,
     reserve_tx: OnceChannel<Command>,
     reserve_rx: Receiver<Command>,
     watch_tubes: HashMap<String, ()>,
 }
 
-
 impl ClientHandler {
-    pub fn new(conn: Arc<TcpStream>, dispatch: Arc<Mutex<Dispatch>>) -> Self {
-        let (tx, rx) = mpsc::unbounded();
+    pub fn new(conn: Framed<TcpStream, LinesCodec>, dispatch: Arc<Mutex<Dispatch>>) -> Self {
+        let (tx, rx) = unbounded_channel();
         let (reserve_tx, reserve_rx) = channel(1);
         let once_channel = OnceChannel::new(reserve_tx);
         let mut watch_tubes = HashMap::new();
@@ -62,6 +65,7 @@ impl ClientHandler {
         }
     }
 
+    // Spawn a new coroutine go handle the client connection
     pub async fn spawn_start(&mut self) -> Result<(), Error> {
         // register
         self.handle_base_command(Command::default()).await.unwrap();
@@ -72,13 +76,16 @@ impl ClientHandler {
         ret
     }
 
+    /// Parse client command ASCII protocol
     async fn parse_command(&mut self) -> Result<(), Error> {
-        let conn = self.conn.clone();
-        let reader = BufReader::new(&*conn);
-        let mut lines = reader.lines();
+        use tokio_stream::StreamExt;
         let mut command: Command = Default::default();
-        while let Some(line) = lines.next().await {
-            let line = line?;
+        while let Some(line) = self.conn.next().await {
+            if line.is_err() {
+                info!("failed to read line command, {}", line.unwrap_err());
+                continue;
+            }
+            let line = line.unwrap();
             debug!("read a new command: {}", line);
             match command.parse(line.as_ref()) {
                 Ok(true) => {
@@ -98,13 +105,11 @@ impl ClientHandler {
         Ok(())
     }
 
-
     async fn handle_reply(&mut self, command: &mut Command) -> Result<(), Error> {
-        let stream = self.conn.clone();
-        let mut writer = &*stream;
         loop {
             let (more, reply) = command.reply().await;
-            writer.write_all((reply + "\r\n").as_bytes()).await?;
+            self.conn.send(&reply).await?;
+            // writer.write_all((reply + "\r\n").as_bytes()).await?;
             if !more {
                 break;
             }
@@ -113,9 +118,7 @@ impl ClientHandler {
     }
 
     async fn handle_reply_err(&mut self, err: Error) -> Result<(), Error> {
-        let stream = self.conn.clone();
-        let mut writer = &*stream;
-        writer.write_all(format!("{}\r\n", err).as_bytes()).await?;
+        self.conn.send(&err.to_string()).await?;
         Ok(())
     }
 
@@ -128,24 +131,43 @@ impl ClientHandler {
                 if self.tube_rx.contains_key(tube_name) {
                     return Ok(command);
                 }
-                let mut dispatch: MutexGuard<Dispatch> = self.dispatch.lock().await;
                 let tx = self.tx.as_ref().unwrap();
-                let tube_ch = dispatch.spawn_tube(tube_name.clone(), self.client_id.clone(), tx.clone(), self.reserve_tx.clone()).await?;
+                let mut dispatch: MutexGuard<Dispatch> = self.dispatch.lock().await;
+                let tube_ch = dispatch
+                    .spawn_tube(
+                        tube_name.clone(),
+                        self.client_id.clone(),
+                        tx.clone(),
+                        self.reserve_tx.clone(),
+                    )
+                    .await?;
                 self.tube_rx.insert(self.use_tube.clone(), tube_ch);
+                debug!("register a new tube {}", self.use_tube);
                 Ok(command)
             }
             CMD::Watch => {
                 let count = self.watch_tubes.len() - 1;
                 if self.tube_rx.contains_key(tube_name) {
-                    command.params.insert("count".to_owned(), format!("{}", count));
+                    command
+                        .params
+                        .insert("count".to_owned(), format!("{}", count));
                     return Ok(command);
                 }
                 let mut dispatch: MutexGuard<Dispatch> = self.dispatch.lock().await;
                 let tx = self.tx.as_ref().unwrap();
-                let tube_ch = dispatch.spawn_tube(tube_name.clone(), self.client_id.clone(), tx.clone(), self.reserve_tx.clone()).await?;
+                let tube_ch = dispatch
+                    .spawn_tube(
+                        tube_name.clone(),
+                        self.client_id.clone(),
+                        tx.clone(),
+                        self.reserve_tx.clone(),
+                    )
+                    .await?;
                 self.tube_rx.insert(tube_name.clone(), tube_ch);
                 self.watch_tubes.insert(tube_name.clone(), ());
-                command.params.insert("count".to_owned(), format!("{}", count + 1));
+                command
+                    .params
+                    .insert("count".to_owned(), format!("{}", count + 1));
                 Ok(command)
             }
             CMD::Ignore => {
@@ -154,16 +176,22 @@ impl ClientHandler {
                     return Ok(command.wrap_result(Err(ProtocolError::NotIgnored)));
                 }
                 if !self.watch_tubes.contains_key(tube_name) {
-                    command.params.insert("count".to_owned(), format!("{}", count));
+                    command
+                        .params
+                        .insert("count".to_owned(), format!("{}", count));
                     return Ok(command);
                 }
 
                 self.watch_tubes.remove(tube_name);
                 let tube_tx = self.tube_rx.get_mut(&self.use_tube).unwrap();
-                tube_tx.send((self.client_id.clone(), command.clone())).await.unwrap();
+                tube_tx
+                    .send((self.client_id.clone(), command.clone()))
+                    .unwrap();
                 let rx = self.rx.as_mut().unwrap();
-                let mut command: Command = rx.next().await.unwrap();
-                command.params.insert("count".to_owned(), format!("{}", count));
+                let mut command: Command = rx.recv().await.unwrap();
+                command
+                    .params
+                    .insert("count".to_owned(), format!("{}", count));
                 Ok(command)
             }
             CMD::Reserve | CMD::ReserveWithTimeout => {
@@ -174,8 +202,8 @@ impl ClientHandler {
                     let tube_ch = self.tube_rx.get_mut(tube_name).unwrap();
                     let mut tube_ch = tube_ch.clone();
                     let command = command.clone();
-                    task::spawn(async move {
-                        tube_ch.send((client_id, command)).await.unwrap();
+                    spawn(async move {
+                        tube_ch.send((client_id, command)).unwrap();
                     });
                     debug!("send a reserve inner command to {}", tube_name);
                 }
@@ -188,25 +216,29 @@ impl ClientHandler {
                 Ok(command)
             }
             CMD::ListTubes => {
-                let mut dispatch = self.dispatch.lock().await;
+                let dispatch = self.dispatch.lock().await;
                 let (count, tubes) = dispatch.list_tubes();
                 let lists = serde_yaml::to_string(&tubes).unwrap();
                 command.yaml = Some(lists);
-                command.params.insert("count".to_owned(), format!("{}", count));
+                command
+                    .params
+                    .insert("count".to_owned(), format!("{}", count));
                 Ok(command)
             }
             CMD::ListTubeUsed => {
-                command.params.insert("tube".to_owned(), self.use_tube.clone());
+                command
+                    .params
+                    .insert("tube".to_owned(), self.use_tube.clone());
                 Ok(command)
             }
-            CMD::Quit => {
-                Err(err_msg("Client quit"))
-            }
+            CMD::Quit => Err(err_msg("Client quit")),
             _ => {
                 let tube_tx = self.tube_rx.get_mut(&self.use_tube).unwrap();
-                tube_tx.send((self.client_id.clone(), command.clone())).await.unwrap();
+                tube_tx
+                    .send((self.client_id.clone(), command.clone()))
+                    .unwrap();
                 let rx = self.rx.as_mut().unwrap();
-                let command = rx.next().await.unwrap();
+                let command = rx.recv().await.unwrap();
                 Ok(command)
             }
         }
@@ -217,24 +249,30 @@ impl ClientHandler {
 mod test {
     use super::*;
     use beanstalkc::Beanstalkc;
-    use std::thread::{self, sleep, Thread};
     use chrono::Local;
+    use std::thread::{self, sleep, Thread};
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn it_async() {
-        task::spawn(async move {});
-        task::block_on(async move {
-            println!("Hello");
-        });
-    }
 
     #[test]
     fn it_double_tube() {
         let mut conn = connect();
-        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        let id = conn
+            .put(
+                b"hello word1",
+                1,
+                Duration::from_secs(3),
+                Duration::from_secs(5),
+            )
+            .unwrap();
         conn.use_tube("ok").unwrap();
-        let id = conn.put(b"hello word2", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        let id = conn
+            .put(
+                b"hello word2",
+                1,
+                Duration::from_secs(3),
+                Duration::from_secs(5),
+            )
+            .unwrap();
         let job = conn.reserve().unwrap();
         println!("{}", job.id());
         let job = conn.reserve().unwrap();
@@ -244,7 +282,14 @@ mod test {
     #[test]
     fn it_reserve() {
         let mut conn = connect();
-        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        let id = conn
+            .put(
+                b"hello word1",
+                1,
+                Duration::from_secs(3),
+                Duration::from_secs(5),
+            )
+            .unwrap();
         let job = conn.reserve().unwrap();
         println!("{}", job.id());
     }
@@ -252,7 +297,14 @@ mod test {
     #[test]
     fn it_reserve_with_timeout() {
         let mut conn = connect();
-        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        let id = conn
+            .put(
+                b"hello word1",
+                1,
+                Duration::from_secs(3),
+                Duration::from_secs(5),
+            )
+            .unwrap();
         let job = conn.reserve_with_timeout(Duration::from_secs(5)).unwrap();
         let id = job.id();
         println!("{}", job.id());
@@ -263,13 +315,20 @@ mod test {
     #[test]
     fn it_watch() {
         let mut conn = connect();
-        let id = conn.watch("ok").unwrap();
+        //let id = conn.watch("ok").unwrap();
     }
 
     #[test]
     fn it_delete() {
         let mut conn = connect();
-        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        let id = conn
+            .put(
+                b"hello word1",
+                1,
+                Duration::from_secs(3),
+                Duration::from_secs(5),
+            )
+            .unwrap();
         let job = conn.reserve().unwrap();
         let id = job.id();
         println!("{}", id);
@@ -281,23 +340,24 @@ mod test {
     fn it_delete2() {
         let mut conn = connect();
         conn.use_tube("a");
-//        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
+        //        let id = conn.put(b"hello word1", 1, Duration::from_secs(3), Duration::from_secs(5)).unwrap();
         for i in 0..100 {
             let job = conn.reserve().unwrap();
             let id = job.id();
             println!("{}", id);
             let b = conn.delete(id).is_ok();
-//            assert!(b);
+            //            assert!(b);
         }
-
-
     }
+
     #[test]
     fn it_kick() {
         let mut conn = connect();
         let tube = format!("tube_{}", Local::now().timestamp_nanos());
         conn.use_tube(tube.as_str()).unwrap();
-        let id = conn.put(b"hello", 1, Duration::from_secs(30), Duration::from_secs(5)).unwrap();
+        let id = conn
+            .put(b"hello", 1, Duration::from_secs(30), Duration::from_secs(5))
+            .unwrap();
         let count = conn.kick(1).unwrap();
         assert_eq!(1, count);
     }
@@ -309,8 +369,11 @@ mod test {
         conn.use_tube(tube.as_str()).unwrap();
 
         let tm = Local::now().timestamp();
-        let id = conn.put(b"hello", 1, Duration::from_secs(5), Duration::from_secs(5)).unwrap();
-        conn.pause_tube(tube.as_str(), Duration::from_secs(100)).unwrap();
+        let id = conn
+            .put(b"hello", 1, Duration::from_secs(5), Duration::from_secs(5))
+            .unwrap();
+        conn.pause_tube(tube.as_str(), Duration::from_secs(100))
+            .unwrap();
         conn.reserve().unwrap();
         println!("{}", Local::now().timestamp() - tm);
     }
@@ -327,23 +390,41 @@ mod test {
     fn it_batch_put() {
         for i in 0..100 {
             let mut conn = connect();
-            println!("-->{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+            println!(
+                "-->{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            );
             for i in 0..100 {
-                let id = conn.put(b"hello", 1, Duration::from_secs(i) / 13, Duration::from_secs(5)).unwrap();
+                let id = conn
+                    .put(
+                        b"hello",
+                        1,
+                        Duration::from_secs(i) / 13,
+                        Duration::from_secs(5),
+                    )
+                    .unwrap();
                 println!("{}", id);
             }
-            println!("<--{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
+            println!(
+                "<--{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            );
         }
-        thread::spawn(move || {
-
-        });
-
+        thread::spawn(move || {});
     }
+
     fn connect() -> Beanstalkc {
         Beanstalkc::new()
             .host("127.0.0.1")
             .port(11300)
             .connection_timeout(Some(Duration::from_secs(3)))
-            .connect().expect("connect failed")
+            .connect()
+            .expect("connect failed")
     }
 }

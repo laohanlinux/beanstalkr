@@ -3,8 +3,6 @@ use std::collections::HashMap;
 use failure::{self, bail, Fail, Error, err_msg};
 use downcast_rs::impl_downcast;
 use downcast_rs::Downcast;
-use futures::{FutureExt, SinkExt};
-use futures::channel::mpsc::{UnboundedSender as Sender, UnboundedReceiver as Receiver};
 
 use crate::architecture::job::{AwaitingClient, Job, State, random_clients, random_factory};
 use crate::architecture::cmd::Command;
@@ -161,7 +159,7 @@ impl<J, A> Tube<J, A> where
                 } else {
                     // FIXME
                     client.request.err = Err(ProtocolError::NotFound);
-                    client.tx.send(client.request.clone()).await;
+                    client.tx.send(client.request.clone()).await.unwrap();
                 }
                 need_delete_id.push(id.clone());
             }
