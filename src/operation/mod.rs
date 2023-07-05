@@ -37,6 +37,7 @@ pub struct ClientHandler {
     dispatch: Arc<Mutex<Dispatch>>,
     tx: Option<UnBoundedSender<Command>>,
     rx: Option<UnBoundedReceiver<Command>>,
+    // store tube
     tube_rx: HashMap<String, TubeSender>,
     reserve_tx: OnceChannel<Command>,
     reserve_rx: Receiver<Command>,
@@ -74,7 +75,7 @@ impl ClientHandler {
         ret
     }
 
-    // Parse client command ASCII protocol
+    /// Parse client command ASCII protocol
     async fn parse_command(&mut self) -> Result<(), Error> {
         use tokio_stream::StreamExt;
         let mut command: Command = Default::default();
@@ -116,7 +117,7 @@ impl ClientHandler {
     }
 
     async fn handle_reply_err(&mut self, err: Error) -> Result<(), Error> {
-        self.conn.send( &err.to_string()).await?;
+        self.conn.send(&err.to_string()).await?;
         Ok(())
     }
 
@@ -140,6 +141,7 @@ impl ClientHandler {
                     )
                     .await?;
                 self.tube_rx.insert(self.use_tube.clone(), tube_ch);
+                debug!("register a new tube {}", self.use_tube);
                 Ok(command)
             }
             CMD::Watch => {

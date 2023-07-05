@@ -116,11 +116,11 @@ impl Dispatch {
             let mut clients: HashMap<ClientId, (CmdSender, OnceChannel<Command>)> = HashMap::new();
             let mut tube: Tube<MinHeap<Job>, MinHeap<AwaitingClient>> = Tube::new(
                 tube_name.clone(),
-                MinHeap::new("".to_string()),
-                MinHeap::new("".to_string()),
-                MinHeap::new("".to_string()),
-                MinHeap::new("".to_string()),
-                MinHeap::new("".to_string()),
+                MinHeap::new("ready".to_string()),
+                MinHeap::new("reserved".to_string()),
+                MinHeap::new("delayed".to_string()),
+                MinHeap::new("buried".to_string()),
+                MinHeap::new("awaiting_clients".to_string()),
             );
             let mut interval = tokio::time::interval(Duration::from_millis(59));
             let (mut _tx, mut _rx) = unbounded_channel::<()>();
@@ -140,13 +140,13 @@ impl Dispatch {
                                 TubeItem::Add(client_id, ch, mut cb, mut reserve_cb_rx) => {
                                     debug!("Insert a new client:{} into tube:{}", client_id, tube_name);
                                     clients.insert(client_id, (ch, reserve_cb_rx));
-                                    cb.send(());
+                                    cb.send(()).unwrap();
                                 },
                                 TubeItem::Delete(client_id, mut cb) =>{
                                     debug!("Remove client {}", client_id);
                                     clients.remove(&client_id);
                                     tube.drop_client(&client_id);
-                                    cb.send(());
+                                    cb.send(()).unwrap();
                                 },
                                 TubeItem::Stop => {
                                     info!("Stop tube: {}", tube_name.clone());
@@ -161,7 +161,7 @@ impl Dispatch {
                              Self::handle_command(&mut clients, &mut tube, command.clone()).await;
                              let cmd = CMD::from_str(&command.1.name).unwrap();
                              if cmd == CMD::ReserveWithTimeout || cmd == CMD::Reserve{
-                                _tx.send(());
+                                _tx.send(()).unwrap();
                              }
                         },
                         None =>{},

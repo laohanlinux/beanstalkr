@@ -159,7 +159,7 @@ impl<J, A> Tube<J, A> where
                 } else {
                     // FIXME
                     client.request.err = Err(ProtocolError::NotFound);
-                    client.tx.send(client.request.clone()).await;
+                    client.tx.send(client.request.clone()).await.unwrap();
                 }
                 need_delete_id.push(id.clone());
             }
