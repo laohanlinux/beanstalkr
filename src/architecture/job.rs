@@ -1,16 +1,13 @@
-use std::time::{Instant, Duration};
-use std::sync::{Arc, atomic::{self, AtomicU64}};
-use std::cmp::Ordering;
 use chrono::Local;
-use futures::channel::mpsc::{UnboundedSender as Sender, UnboundedReceiver as Receiver};
+use failure::{self, bail, Error};
+use fasthash::metro;
+use std::cmp::Ordering;
+use std::sync::{atomic::AtomicU64, Arc};
 use uuid::Uuid;
-use std::hash::{Hash, Hasher};
-use fasthash::{metro, MetroHasher};
-use failure::{self, Fail, bail, Error, err_msg};
 
 use super::cmd::Command;
 use super::job_state::is_valid_transitions_to;
-use crate::architecture::tube::{PriorityQueueItem, Id, ClientId};
+use crate::architecture::tube::{ClientId, Id, PriorityQueueItem};
 use crate::operation::once_channel::OnceChannel;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -61,7 +58,19 @@ impl std::fmt::Display for State {
 
 impl Ord for State {
     fn cmp(&self, other: &State) -> Ordering {
-        self.cmp(&other)
+        let self_val = match self {
+            State::Ready => 0,
+            State::Delayed => 1,
+            State::Reserved => 2,
+            State::Buried => 3,
+        };
+        let other_val = match other {
+            State::Ready => 0,
+            State::Delayed => 1,
+            State::Reserved => 2,
+            State::Buried => 3,
+        };
+        self_val.cmp(&other_val)
     }
 }
 
@@ -92,6 +101,7 @@ impl Default for Job {
 
 impl Job {
     pub fn new(_id: Id, pri: i64, delay: i64, ttr: i64, bytes: i64, data: String) -> Self {
+        let timestamp = Local::now().timestamp_nanos_opt().unwrap();
         let mut job = Job {
             _id,
             private: pri,
@@ -102,11 +112,11 @@ impl Job {
             bytes,
             data,
             state: State::Ready,
-            timestamp: Local::now().timestamp_nanos(),
+            timestamp,
         };
         if job.delay > 0 {
             job.state = State::Delayed;
-            job.started_delay_at = Local::now().timestamp_nanos();
+            job.started_delay_at = timestamp;
         }
         job
     }
@@ -127,9 +137,9 @@ impl Job {
             bail!("Failed to set new state");
         }
         if self.state == State::Delayed {
-            self.started_delay_at = Local::now().timestamp_nanos();
+            self.started_delay_at = Local::now().timestamp_nanos_opt().unwrap();
         } else if state == State::Reserved {
-            self.started_ttr_at = Local::now().timestamp_nanos();
+            self.started_ttr_at = Local::now().timestamp_nanos_opt().unwrap();
         }
         self.state = state.clone();
         Ok(())
@@ -139,8 +149,6 @@ impl Job {
         &self.state
     }
 }
-
-use std::time::SystemTime;
 
 impl PriorityQueueItem for Job {
     fn key(&self, now: Option<i64>) -> i64 {
@@ -162,11 +170,11 @@ impl PriorityQueueItem for Job {
     }
 
     fn enqueue(&mut self) {
-        self.timestamp = Local::now().timestamp_nanos();
+        self.timestamp = Local::now().timestamp_nanos_opt().unwrap();
     }
 
     fn dequeue(&mut self) {
-        self.timestamp = Local::now().timestamp_nanos();
+        self.timestamp = Local::now().timestamp_nanos_opt().unwrap();
     }
 }
 
@@ -214,19 +222,22 @@ impl Eq for AwaitingClient {}
 
 impl AwaitingClient {
     pub fn new(_id: ClientId, request: Command, tx: OnceChannel<Command>) -> AwaitingClient {
-        let timeout = request.params.get("timeout").map_or_else(|| -1, |tm| tm.parse::<i64>().unwrap() * NANO);
+        let timeout = request
+            .params
+            .get("timeout")
+            .map_or_else(|| -1, |tm| tm.parse::<i64>().unwrap() * NANO);
         AwaitingClient {
             id: _id,
             request,
             tx,
-            queued_at: Local::now().timestamp_nanos(),
+            queued_at: Local::now().timestamp_nanos_opt().unwrap(),
             timeout,
         }
     }
 
     // unit nanos
     pub fn time_left(&self) -> i64 {
-        self.timeout - (Local::now().timestamp_nanos() - self.queued_at)
+        self.timeout - (Local::now().timestamp_nanos_opt().unwrap() - self.queued_at)
     }
 }
 
@@ -244,7 +255,7 @@ impl PriorityQueueItem for AwaitingClient {
     }
 
     fn enqueue(&mut self) {
-        self.queued_at = Local::now().timestamp_nanos();
+        self.queued_at = Local::now().timestamp_nanos_opt().unwrap();
     }
 
     // not used
@@ -256,7 +267,7 @@ lazy_static! {
 }
 
 pub fn random_factory() -> Id {
-//    id.fetch_add(1, atomic::Ordering::SeqCst)
+    //    id.fetch_add(1, atomic::Ordering::SeqCst)
     metro::hash64(Uuid::new_v4().as_bytes())
 }
 
@@ -266,10 +277,10 @@ pub fn random_clients() -> Id {
 
 #[cfg(test)]
 mod tests {
-    use chrono::prelude::*;
-    use crate::backend::min_heap::MinHeap;
     use crate::architecture::job::{Job, NANO};
     use crate::architecture::tube::PriorityQueue;
+    use crate::backend::min_heap::MinHeap;
+    use chrono::prelude::*;
 
     #[test]
     fn it_enqueue_dequeue() {
@@ -277,7 +288,10 @@ mod tests {
         let mut min = 0;
         while let Some(job) = heap.dequeue() {
             let delay_at = job.delay * NANO + job.started_delay_at;
-            println!("!id: {:2}, delay:{:3}, started_delay_at: {}, delay_at: {}", job._id, job.delay, job.started_delay_at, delay_at);
+            println!(
+                "!id: {:2}, delay:{:3}, started_delay_at: {}, delay_at: {}",
+                job._id, job.delay, job.started_delay_at, delay_at
+            );
             assert!(min <= delay_at);
             min = delay_at;
         }
@@ -286,7 +300,14 @@ mod tests {
     fn build_min_heap(n: u64) -> MinHeap<Job> {
         let mut heap = MinHeap::new("test".to_owned());
         for i in 0..n {
-            heap.enqueue(Job::new(i, (i % 2 + 1) as i64, (i % 10 + 1) as i64, (i + 1) as i64, 10, "awaiting_clients".to_owned()))
+            heap.enqueue(Job::new(
+                i,
+                (i % 2 + 1) as i64,
+                (i % 10 + 1) as i64,
+                (i + 1) as i64,
+                10,
+                "awaiting_clients".to_owned(),
+            ))
         }
         heap
     }

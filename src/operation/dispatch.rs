@@ -2,7 +2,6 @@ use crate::architecture::cmd::{Command, CMD};
 use crate::architecture::job::{AwaitingClient, Job};
 use crate::architecture::tube::{ClientId, PriorityQueue, Tube};
 use crate::backend::min_heap::MinHeap;
-use crate::channel::Sender;
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -45,7 +44,7 @@ enum TubeItem {
 }
 
 pub struct Dispatch {
-    stop: Vec<Sender<()>>,
+    stop: Vec<futures::channel::mpsc::Sender<()>>,
     tube_ch: HashMap<String, InnerSender>,
     cmd_tx: HashMap<String, UnboundedSender<(ClientId, Command)>>,
 }
@@ -304,4 +303,3 @@ impl Dispatch {
         Ok(())
     }
 }
-
