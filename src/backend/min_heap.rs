@@ -1,6 +1,5 @@
-use std::collections::BinaryHeap;
-
-use crate::architecture::tube::{PriorityQueueItem, PriorityQueue, Id};
+use std::fmt::{Debug, Formatter};
+use crate::architecture::tube::{Id, PriorityQueue, PriorityQueueItem};
 use crate::backend::fake_queue::FakeHeap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,17 +9,27 @@ pub struct MinHeap<H: PriorityQueueItem + Ord> {
     timestamp: i64,
 }
 
-impl<H> MinHeap<H> where H: PriorityQueueItem + Ord {
+
+impl<H> MinHeap<H>
+where
+    H: PriorityQueueItem + Ord,
+{
     pub fn new(name: String) -> Self {
         MinHeap {
             heap: FakeHeap::new(),
             tube_name: name,
-            timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as i64,
         }
     }
 }
 
-impl<H> PriorityQueue<H> for MinHeap<H> where H: PriorityQueueItem + Ord {
+impl<H> PriorityQueue<H> for MinHeap<H>
+where
+    H: PriorityQueueItem + Ord,
+{
     fn enqueue(&mut self, mut item: H) {
         item.enqueue();
         self.heap.push(item);
@@ -40,14 +49,14 @@ impl<H> PriorityQueue<H> for MinHeap<H> where H: PriorityQueueItem + Ord {
     fn find(&self, id: &Id) -> Option<&H> {
         match self.heap.binary_search_by_key(id, |item| item.id().clone()) {
             Ok(idx) => self.heap.get(idx),
-            _ => None
+            _ => None,
         }
     }
 
     fn remove(&mut self, id: &Id) -> Option<H> {
         match self.heap.binary_search_by_key(id, |item| item.id().clone()) {
             Ok(idx) => self.heap.remove(idx),
-            _ => None
+            _ => None,
         }
     }
 
@@ -56,7 +65,9 @@ impl<H> PriorityQueue<H> for MinHeap<H> where H: PriorityQueueItem + Ord {
     }
 
     fn set_time(&mut self) {
-        self.timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64;
+        self.timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as i64;
     }
 }
-

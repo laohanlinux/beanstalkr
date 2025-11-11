@@ -1,7 +1,4 @@
-#![feature(const_if_match)]
-#![feature(const_fn)]
-#![feature(associated_type_bounds)]
-#![recursion_limit="512"]
+#![recursion_limit = "512"]
 
 #[macro_use]
 extern crate lazy_static;
@@ -14,25 +11,22 @@ extern crate log;
 mod architecture;
 mod backend;
 mod backup;
-mod operation;
 mod channel;
+mod operation;
 
 use structopt::StructOpt;
-use chrono::prelude::*;
-use async_std::prelude::*;
-use async_std::task;
+
 use async_std::io;
-use async_std::net::{TcpListener, TcpStream};
+use async_std::net::TcpListener;
+use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex};
-use failure::{self, Fail, Error, err_msg};
-use env_logger::fmt::Target;
+use async_std::task;
 
-use crate::architecture::cmd::Command;
-use crate::operation::ClientHandler;
-use crate::architecture::tube::Tube;
+use failure;
+
 use crate::operation::dispatch::Dispatch;
+use crate::operation::ClientHandler;
 
-use std::fs::File;
 use std::process;
 
 /// A basic example
@@ -48,7 +42,7 @@ struct Opt {
 
 fn main() -> io::Result<()> {
     pretty_env_logger::init_timed();
-    ctrlc::set_handler(move || {
+    _ = ctrlc::set_handler(move || {
         info!("beanstalkr exit");
         process::exit(0);
     });

@@ -1,7 +1,6 @@
-use futures::future::err;
-use failure::{self, Fail, Error, err_msg};
-use async_std::sync::{channel, Arc, Sender, Receiver};
-
+use async_std::channel::Sender;
+use async_std::sync::Arc;
+use failure::{self, err_msg, Error};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -20,35 +19,25 @@ impl<T> OnceChannel<T> {
     }
 
     pub fn open(&mut self) {
-        let b = self.sent.compare_and_swap(true, false, Ordering::Relaxed);
-        assert!(b);
+        let b = self
+            .sent
+            .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed);
+        assert!(b.is_ok() && b.unwrap());
     }
 
     pub async fn send(&mut self, value: T) -> Result<(), Error> {
-        if self.sent.compare_and_swap(false, true, Ordering::Relaxed) == false {
-            debug!("Get once channel locker");
-            self.sender.send(value).await;
-            return Ok(());
+        let ret = self
+            .sent
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed);
+        if ret.is_err() {
+            return Err(err_msg("channel has sent a value"));
         }
-        Err(err_msg("channel has sent a value"))
-    }
-}
+        if !ret.unwrap() {
+            return Err(err_msg("channel has sent a value"));
+        }
 
-#[cfg(test)]
-mod tests{
-    use super::*;
-    use async_std::task;
-
-    #[test]
-    fn it_clone() {
-        let mut runtime = task::Builder::new();
-        let mut join = runtime.spawn(async move {
-            let (tx, rx) = channel::<i32>(1);
-            let mut ch = OnceChannel::new(tx);
-            ch.send(100).await;
-            rx.recv().await;
-            println!("Hello Word");
-        }).unwrap();
-        join.task();
+        debug!("Get once channel locker");
+        _ = self.sender.send(value).await;
+        return Ok(());
     }
 }

@@ -1,4 +1,4 @@
-use failure::{Fail, Error};
+use failure::Fail;
 
 #[derive(Debug, Fail)]
 pub enum TransitionError {
