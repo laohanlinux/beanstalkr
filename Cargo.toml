@@ -11,7 +11,7 @@ structopt = "0.3"
 strum = "0.17.1"
 strum_macros = "0.17.1"
 failure = "0.1.6"
-chrono = { version = "0.4", features = ["serde", "rustc-serialize"] }
+chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 async-stream = "0.2.0"
 log = "0.4"

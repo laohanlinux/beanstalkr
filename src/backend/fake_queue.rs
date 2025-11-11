@@ -1,5 +1,3 @@
-use crate::architecture::tube::PriorityQueueItem;
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct FakeHeap<T>(Vec<T>);
 
@@ -10,14 +8,11 @@ impl<T> FakeHeap<T> {
 }
 
 impl<T: Ord> FakeHeap<T> {
-    pub fn binary_search_by_key<'a, B, F>(
-        &'a self,
-        b: &B,
-        f: F,
-    ) -> Result<usize, usize>
-        where
-            B: Ord,
-            F: FnMut(&'a T) -> B {
+    pub fn binary_search_by_key<'a, B, F>(&'a self, b: &B, f: F) -> Result<usize, usize>
+    where
+        B: Ord,
+        F: FnMut(&'a T) -> B,
+    {
         self.0.binary_search_by_key(b, f)
     }
 

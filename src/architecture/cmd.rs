@@ -1,13 +1,12 @@
-use strum::*;
-use failure::{Fail, bail, Error, err_msg};
-use uuid::Uuid;
-
-use std::str::FromStr;
-use std::collections::HashMap;
-use crate::architecture::job::{Job, random_factory};
-use crate::architecture::tube::PriorityQueueItem;
-use crate::architecture::protocol_config::{CommandParseOptions, CommandReplyOptions, CMD_PARSE_OPTIONS, CMD_REPLY_OPTIONS};
 use crate::architecture::error::ProtocolError;
+use crate::architecture::job::{random_factory, Job};
+use crate::architecture::protocol_config::{
+    CommandParseOptions, CMD_PARSE_OPTIONS, CMD_REPLY_OPTIONS,
+};
+use crate::architecture::tube::PriorityQueueItem;
+use failure::{err_msg, Error};
+use std::collections::HashMap;
+use std::str::FromStr;
 
 #[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq, EnumString, ToString, EnumCount, EnumDiscriminants)]
@@ -88,7 +87,7 @@ impl Clone for CMD {
     }
 }
 
-const MaxJobSize: i64 = 65536;
+const MAX_JOB_SIZE: i64 = 65536;
 
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -131,7 +130,7 @@ impl Command {
         if ttr <= 0 {
             ttr = 1;
         }
-        if bytes > MaxJobSize {
+        if bytes > MAX_JOB_SIZE {
             return Err(ProtocolError::JobTooBig.into());
         }
         if bytes != data.len() as i64 {
@@ -155,7 +154,9 @@ impl Command {
             }
             let name = parts.first().unwrap().to_lowercase();
 
-            let opts: &CommandParseOptions = CMD_PARSE_OPTIONS.get(&name).ok_or(err_msg(ProtocolError::UnknownCommand))?;
+            let opts: &CommandParseOptions = CMD_PARSE_OPTIONS
+                .get(&name)
+                .ok_or(err_msg(ProtocolError::UnknownCommand))?;
             // 解析出命令名
             self.name = name;
 
@@ -165,21 +166,23 @@ impl Command {
             }
 
             // 解析命令信息
-            self.raw_command = raw_command.clone().to_string();
+            self.raw_command = raw_command.to_string();
             self.not_complete_received = opts.waiting_for_more;
 
             for (i, param_name) in opts.params.iter().enumerate() {
-                self.params.insert(param_name.to_string(), parts[i + 1].clone().to_string());
+                self.params
+                    .insert(param_name.to_string(), parts[i + 1].to_string());
             }
 
-//            debug!("PROTOCOL command after parsing {:?}", self);
+            //            debug!("PROTOCOL command after parsing {:?}", self);
             return Ok(!self.not_complete_received);
         }
 
         // 解析第2轮命令
-//        debug!("GOT MORE {:?}", self);
+        //        debug!("GOT MORE {:?}", self);
         if self.name == CMD::Put.to_string() {
-            self.params.insert("data".to_owned(), raw_command.to_owned());
+            self.params
+                .insert("data".to_owned(), raw_command.to_owned());
             self.raw_command = raw_command.to_owned() + "\r\n";
             self.create_job_from_params()?;
             self.not_complete_received = false;
@@ -199,10 +202,20 @@ impl Command {
                 if opts.param.is_empty() {
                     return (false, opts.message.clone());
                 }
-                return (false, vec![opts.message.clone(), self.params.get(&opts.param).unwrap().clone()].join(" "));
+                return (
+                    false,
+                    vec![
+                        opts.message.clone(),
+                        self.params.get(&opts.param).unwrap().clone(),
+                    ]
+                    .join(" "),
+                );
             }
 
-            return (false, vec![opts.message.clone(), self.job.id().to_string()].join(" "));
+            return (
+                false,
+                vec![opts.message.clone(), self.job.id().to_string()].join(" "),
+            );
         }
 
         if !self.not_complete_send {
@@ -212,7 +225,10 @@ impl Command {
                     return (true, format!("FOUND {} {}", self.job.id(), self.job.bytes));
                 }
                 CMD::Reserve | CMD::ReserveWithTimeout => {
-                    return (true, format!("RESERVED {} {}", self.job.id(), self.job.bytes));
+                    return (
+                        true,
+                        format!("RESERVED {} {}", self.job.id(), self.job.bytes),
+                    );
                 }
                 CMD::ListTubes => {
                     return (true, format!("OK {}", self.yaml.as_ref().unwrap().len()));
@@ -220,7 +236,7 @@ impl Command {
                 CMD::ListTubesWatched => {
                     return (true, format!("OK {}", self.yaml.as_ref().unwrap().len()));
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
         }
         if self.yaml.is_some() {

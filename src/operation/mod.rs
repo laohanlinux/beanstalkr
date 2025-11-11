@@ -1,9 +1,10 @@
 use async_std::prelude::*;
 use async_std::task;
 use async_std::stream;
+use async_std::channel::{Sender, Receiver, self};
 use async_std::io::{self, BufReader};
 use async_std::net::{TcpListener, TcpStream};
-use async_std::sync::{Arc, Mutex, MutexGuard, Sender, Receiver, channel};
+use async_std::sync::{Arc, Mutex, MutexGuard};
 
 use std::str::FromStr;
 use std::collections::HashMap;
@@ -44,7 +45,7 @@ pub struct ClientHandler {
 impl ClientHandler {
     pub fn new(conn: Arc<TcpStream>, dispatch: Arc<Mutex<Dispatch>>) -> Self {
         let (tx, rx) = mpsc::unbounded();
-        let (reserve_tx, reserve_rx) = channel(1);
+        let (reserve_tx, reserve_rx) = channel::bounded(1);
         let once_channel = OnceChannel::new(reserve_tx);
         let mut watch_tubes = HashMap::new();
         watch_tubes.insert("default".to_string(), ());

@@ -33,6 +33,7 @@ pub type ClientId = u64;
 pub trait PriorityQueueItem: Downcast {
     fn key(&self, now: Option<i64>) -> i64;
     fn id(&self) -> &Id;
+    #[warn(dead_code)]
     fn timestamp(&self) -> i64;
     fn enqueue(&mut self);
     fn dequeue(&mut self);
