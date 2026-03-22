@@ -5,64 +5,160 @@ extern crate lazy_static;
 extern crate strum;
 #[macro_use]
 extern crate strum_macros;
-#[macro_use]
-extern crate log;
+
+use std::process;
+use std::sync::Arc;
+
+use clap::Parser;
+use tokio::io;
+use tokio::net::TcpListener;
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::Mutex;
+use tokio::task;
+use tracing::{debug, error, info, Instrument};
 
 mod architecture;
 mod backend;
 mod backup;
-mod channel;
 mod operation;
 
-use structopt::StructOpt;
-
-use async_std::io;
-use async_std::net::TcpListener;
-use async_std::prelude::*;
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
-
-use failure;
-
+use crate::architecture::stats::{set_draining, GLOBAL_STATS};
+use crate::backup::binlog::{init_binlog, get_binlog, BinlogManager};
 use crate::operation::dispatch::Dispatch;
 use crate::operation::ClientHandler;
+use std::sync::atomic::Ordering;
 
-use std::process;
-
-/// A basic example
-#[derive(StructOpt, Debug)]
-#[structopt(name = "basic")]
+/// Beanstalkd 协议的 Rust 实现
+#[derive(Parser, Debug)]
+#[command(name = "beanstalkr", version = env!("CARGO_PKG_VERSION"))]
 struct Opt {
-    #[structopt(short, long, parse(from_occurrences))]
+    /// 日志详细程度（可多次指定，-v 表示警告，-vv 表示信息，-vvv 表示调试）
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    #[allow(dead_code)]
     verbose: u8,
 
-    #[structopt(short, long, default_value = "0.0.0.0:11300")]
+    /// 监听地址
+    #[arg(short, long, default_value = "0.0.0.0:11300")]
     addr: String,
+    
+    /// 最大任务大小（字节）
+    #[arg(short = 'z', long, default_value = "65535")]
+    max_job_size: usize,
+    
+    /// 启用 binlog 持久化
+    #[arg(short = 'b', long, default_value = "false")]
+    enable_binlog: bool,
+    
+    /// Binlog 目录
+    #[arg(long, default_value = "./binlog")]
+    binlog_dir: String,
+    
+    /// Binlog 文件最大大小（字节）
+    #[arg(long, default_value = "10485760")]  // 10MB
+    binlog_size: u64,
+    
+    /// fsync 间隔（毫秒），0 表示每次写入都 fsync，默认 50ms
+    #[arg(short = 'f', long, default_value = "50")]
+    fsync_interval: u64,
+    
+    /// 从不 fsync（覆盖 -f 选项）
+    #[arg(short = 'F', long, default_value = "false")]
+    no_fsync: bool,
+    
+    /// 切换到的用户和组（需要 root 权限）
+    #[arg(short = 'u', long)]
+    user: Option<String>,
 }
 
-fn main() -> io::Result<()> {
-    pretty_env_logger::init_timed();
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    tracing_subscriber::fmt::init();
+    
     _ = ctrlc::set_handler(move || {
         info!("beanstalkr exit");
         process::exit(0);
     });
 
-    let opt: Opt = Opt::from_args();
-    task::block_on(async move {
-        let listener = TcpListener::bind(opt.addr).await?;
-        let mut incoming = listener.incoming();
-        info!("Listening on {}", listener.local_addr()?);
-        let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
-        while let Some(stream) = incoming.next().await {
-            let stream = stream?;
-            let dispatch = dispatch.clone();
+    // 设置 SIGUSR1 信号处理器（Drain 模式）
+    match signal(SignalKind::user_defined1()) {
+        Ok(mut sigusr1) => {
             task::spawn(async move {
-                let mut client = ClientHandler::new(Arc::new(stream), dispatch.clone());
-                if let Err(err) = client.spawn_start().await {
-                    error!("spawn start: {}", err);
+                loop {
+                    sigusr1.recv().await;
+                    info!("Received SIGUSR1, entering drain mode");
+                    set_draining(true);
                 }
             });
         }
-        Ok(())
-    })
+        Err(e) => {
+            error!("Failed to setup SIGUSR1 handler: {}", e);
+        }
+    }
+
+    let opt: Opt = Opt::parse();
+    
+    // 初始化最大任务大小
+    GLOBAL_STATS.max_job_size.store(opt.max_job_size as u64, Ordering::SeqCst);
+    
+    // 初始化 binlog
+    let mut recovered_jobs = Vec::new();
+    if opt.enable_binlog {
+        let fsync_interval = if opt.no_fsync { 0 } else { opt.fsync_interval };
+        match init_binlog(&opt.binlog_dir, opt.binlog_size, fsync_interval, opt.no_fsync).await {
+            Ok(_) => {
+                info!("Binlog enabled: dir={}, max_size={}, fsync_interval={}ms, no_fsync={}", 
+                    opt.binlog_dir, opt.binlog_size, fsync_interval, opt.no_fsync);
+                
+                // 从 binlog 恢复作业
+                if let Some(manager) = get_binlog() {
+                    let manager = manager.lock().await;
+                    match manager.recover().await {
+                        Ok(jobs) => {
+                            recovered_jobs = jobs;
+                            info!("Recovered {} jobs from binlog", recovered_jobs.len());
+                        }
+                        Err(e) => {
+                            error!("Failed to recover from binlog: {}", e);
+                        }
+                    }
+                }
+                
+                // 更新 stats 中的 binlog 信息
+                if let Some(manager) = get_binlog() {
+                    let manager = manager.lock().await;
+                    GLOBAL_STATS.binlog_current_index.store(manager.current_index(), Ordering::SeqCst);
+                    GLOBAL_STATS.binlog_max_size.store(opt.binlog_size, Ordering::SeqCst);
+                }
+            }
+            Err(e) => {
+                error!("Failed to initialize binlog: {}", e);
+            }
+        }
+    }
+    
+    let listener = TcpListener::bind(&opt.addr).await?;
+    info!(addr = %opt.addr, max_job_size = opt.max_job_size, "Listening on {}", listener.local_addr()?);
+    
+    let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
+    
+    // 恢复 binlog 中的 jobs
+    if !recovered_jobs.is_empty() {
+        dispatch.lock().await.recover_jobs(recovered_jobs).await;
+    }
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        let dispatch = dispatch.clone();
+        let span = tracing::info_span!("client", addr = %addr);
+        task::spawn(async move {
+            let mut client = ClientHandler::new(stream, dispatch);
+            if let Err(err) = client.spawn_start().await {
+                let err_str = err.to_string();
+                if err_str.contains("Client quit") {
+                    debug!("Client disconnected");
+                } else {
+                    error!(error = %err, "spawn start failed");
+                }
+            }
+        }.instrument(span));
+    }
 }

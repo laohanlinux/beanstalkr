@@ -1,6 +1,3 @@
-use async_trait::async_trait;
+pub mod binlog;
 
-#[async_trait]
-pub trait Backup {
-    async fn write() -> Result<(), ::std::io::Error>;
-}
+pub use binlog::{BinlogManager, BinlogRecord, RecordType, init_binlog, get_binlog, log_put, log_delete};

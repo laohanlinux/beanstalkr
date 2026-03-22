@@ -1,8 +1,9 @@
-use async_std::channel::Sender;
-use async_std::sync::Arc;
-use failure::{self, err_msg, Error};
+use std::sync::Arc;
+use tokio::sync::mpsc::Sender;
+use anyhow::{anyhow, Error};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct OnceChannel<T> {
@@ -30,14 +31,14 @@ impl<T> OnceChannel<T> {
             .sent
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed);
         if ret.is_err() {
-            return Err(err_msg("channel has sent a value"));
+            return Err(anyhow!("channel has sent a value"));
         }
         if !ret.unwrap() {
-            return Err(err_msg("channel has sent a value"));
+            return Err(anyhow!("channel has sent a value"));
         }
 
         debug!("Get once channel locker");
         _ = self.sender.send(value).await;
-        return Ok(());
+        Ok(())
     }
 }
