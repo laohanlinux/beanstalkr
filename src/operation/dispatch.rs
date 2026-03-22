@@ -22,6 +22,7 @@ use crate::architecture::job::{AwaitingClient, Job, State};
 use crate::architecture::stats::{is_draining, GLOBAL_STATS};
 use crate::architecture::tube::{ClientId, PriorityQueue, Tube};
 use crate::backup::binlog::{log_put, log_delete, JobState};
+use crate::backend::job_store::{global_insert_job, global_remove_job};
 use crate::backend::min_heap::MinHeap;
 use crate::operation::once_channel::OnceChannel;
 use std::sync::atomic::Ordering;
@@ -361,6 +362,9 @@ impl Dispatch {
                         return;
                     }
 
+                    // 插入全局存储
+                    global_insert_job(command.1.job.clone());
+                    
                     GLOBAL_STATS.inc_total_jobs();
                     match tube.put(command.1.clone()) {
                         Ok(()) => {
@@ -387,6 +391,8 @@ impl Dispatch {
                             tx.send(cmd).await.unwrap();
                         }
                         Err(e) => {
+                            // 失败时从全局存储移除
+                            global_remove_job(command.1.job.id());
                             let mut cmd = command.1.clone();
                             cmd.err = Err(e);
                             tx.send(cmd).await.unwrap();
@@ -414,6 +420,8 @@ impl Dispatch {
                     
                     // 写入 binlog delete 记录
                     if command.1.err.is_ok() {
+                        // 从全局存储移除
+                        global_remove_job(&job_id);
                         let tube_name = tube.name();
                         if let Err(e) = log_delete(job_id, tube_name).await {
                             warn!("Failed to write binlog delete: {}", e);
@@ -467,7 +475,7 @@ impl Dispatch {
                     GLOBAL_STATS.inc_cmd("peek");
                     match tube.peek(&command.1) {
                         Ok(job) => {
-                            command.1.job = job.clone();
+                            command.1.job = job;  // peek 已返回复制的 Job
                         }
                         Err(err) => {
                             command.1.err = Err(err);
@@ -479,7 +487,7 @@ impl Dispatch {
                     GLOBAL_STATS.inc_cmd("peek-ready");
                     match tube.peek_ready() {
                         Ok(job) => {
-                            command.1.job = job.clone();
+                            command.1.job = job;  // peek 已返回复制的 Job
                         }
                         Err(err) => {
                             command.1.err = Err(err);
@@ -491,7 +499,7 @@ impl Dispatch {
                     GLOBAL_STATS.inc_cmd("peek-delayed");
                     match tube.peek_delayed() {
                         Ok(job) => {
-                            command.1.job = job.clone();
+                            command.1.job = job;  // peek 已返回复制的 Job
                         }
                         Err(err) => {
                             command.1.err = Err(err);
@@ -503,7 +511,7 @@ impl Dispatch {
                     GLOBAL_STATS.inc_cmd("peek-buried");
                     match tube.peek_buried() {
                         Ok(job) => {
-                            command.1.job = job.clone();
+                            command.1.job = job;  // peek 已返回复制的 Job
                         }
                         Err(err) => {
                             command.1.err = Err(err);

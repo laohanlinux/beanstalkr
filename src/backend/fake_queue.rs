@@ -44,7 +44,7 @@ impl<T: Ord + Clone + Hash> FakeHeap<T> {
 
     pub fn pop_min(&mut self) -> Option<T> {
         let result = self.heap.pop_min();
-        if let Some(ref item) = result {
+        if let Some(ref _item) = result {
             // 从 id_map 中移除（如果存在）
             // 由于我们不知道 ID，这里不处理，由调用者维护
         }

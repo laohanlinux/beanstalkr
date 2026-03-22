@@ -6,7 +6,7 @@
 //! - 类型: 0=put, 1=peek, 2=delete, 3=release, 4=bury, 5=kick
 //! - 数据格式取决于类型
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::fs::File as StdFile;
@@ -527,6 +527,113 @@ impl BinlogManager {
     /// 获取写入记录数
     pub fn records_written(&self) -> u64 {
         self.records_written
+    }
+    
+    /// 执行 WAL 垃圾回收
+    /// 删除不再包含有效 job 的旧 binlog 文件
+    /// 对应 C 版本中的 walgc 函数
+    pub async fn gc(&self) -> Result<usize> {
+        let mut deleted_count = 0;
+        let mut current_check = 1u64;
+        
+        loop {
+            // 检查文件是否存在
+            let path = Self::binlog_path(&self.base_dir, current_check);
+            if !path.exists() {
+                if current_check > self.current_index {
+                    break;
+                }
+                current_check += 1;
+                continue;
+            }
+            
+            // 检查文件是否还在被引用（通过读取文件内容检查）
+            // 简化实现：删除所有非当前文件的旧文件
+            if current_check < self.current_index {
+                // 检查文件是否为空或只包含已删除的 job
+                match self.should_delete_file(current_check).await {
+                    Ok(true) => {
+                        match tokio::fs::remove_file(&path).await {
+                            Ok(_) => {
+                                info!("GC removed binlog file: {:?}", path);
+                                deleted_count += 1;
+                            }
+                            Err(e) => {
+                                warn!("Failed to remove binlog file {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                    Ok(false) => {
+                        debug!("Keeping binlog file: {:?}", path);
+                    }
+                    Err(e) => {
+                        warn!("Error checking binlog file {:?}: {}", path, e);
+                    }
+                }
+            }
+            
+            current_check += 1;
+        }
+        
+        if deleted_count > 0 {
+            info!("WAL GC completed: removed {} files", deleted_count);
+        }
+        
+        Ok(deleted_count)
+    }
+    
+    /// 检查是否应该删除指定的 binlog 文件
+    /// 简化实现：如果文件很小（小于1KB），认为可以删除
+    /// 实际应该检查所有 job 是否都已被删除
+    async fn should_delete_file(&self, index: u64) -> Result<bool> {
+        let path = Self::binlog_path(&self.base_dir, index);
+        
+        // 读取文件内容
+        let mut file = File::open(&path).await?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).await?;
+        
+        // 如果文件为空或很小，可以删除
+        if buffer.len() < 100 {
+            return Ok(true);
+        }
+        
+        // 解析文件中的所有记录
+        let mut offset = 0usize;
+        let mut has_active_jobs = false;
+        
+        while offset < buffer.len() {
+            if offset + 4 > buffer.len() {
+                break;
+            }
+            
+            let record_len = u32::from_be_bytes([
+                buffer[offset],
+                buffer[offset + 1],
+                buffer[offset + 2],
+                buffer[offset + 3],
+            ]) as usize;
+            
+            if offset + 4 + record_len > buffer.len() {
+                break;
+            }
+            
+            // 解析记录
+            if let Some(record) = BinlogRecord::deserialize(&buffer[offset..offset + 4 + record_len]) {
+                // 如果是 put 记录且 job 未被删除，认为文件还有效
+                if record.record_type == RecordType::Put {
+                    // 检查 job 是否还在全局存储中
+                    if crate::backend::job_store::global_contains_job(&record.job_id) {
+                        has_active_jobs = true;
+                    }
+                }
+            }
+            
+            offset += 4 + record_len;
+        }
+        
+        // 如果没有活跃的 job，可以删除
+        Ok(!has_active_jobs)
     }
 }
 

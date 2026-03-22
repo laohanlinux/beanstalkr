@@ -672,7 +672,13 @@ where
             .get("delay")
             .map(|item| item.parse::<i64>().unwrap())
             .ok_or(ProtocolError::BadFormat)?;
-        self.pause_until = Local::now().timestamp() + delay;
+        
+        // 对应 C 版本: if (delay == 0) { delay = 1; }
+        // 确保暂停时间为正数，使等待客户端能在截止时间唤醒
+        let effective_delay = if delay <= 0 { 1 } else { delay };
+        
+        self.pause_until = Local::now().timestamp() + effective_delay;
+        self.pause_tube_time = effective_delay;
         self.cmd_pause_tube += 1;
         Ok(())
     }
@@ -705,39 +711,46 @@ where
         Err(ProtocolError::NotFound)
     }
 
-    pub fn peek(&self, cmd: &Command) -> Result<&Job, ProtocolError> {
+    pub fn peek(&self, cmd: &Command) -> Result<Job, ProtocolError> {
         let id = cmd
             .params
             .get("id")
             .unwrap()
             .parse::<Id>()
             .map_err(|_| ProtocolError::BadFormat)?;
-        // 在所有队列中查找
+        
+        // 首先在本地 tube 的所有队列中查找
         if let Some(job) = self.ready.find(&id) {
-            return Ok(job);
+            return Ok(job.copy());
         }
         if let Some(job) = self.delayed.find(&id) {
-            return Ok(job);
+            return Ok(job.copy());
         }
         if let Some(job) = self.reserved.find(&id) {
-            return Ok(job);
+            return Ok(job.copy());
         }
         if let Some(job) = self.buried.find(&id) {
-            return Ok(job);
+            return Ok(job.copy());
         }
+        
+        // 如果本地找不到，尝试全局查找（对应 C 版本的全局 job hash table）
+        if let Some(job) = crate::backend::job_store::global_find_job(&id) {
+            return Ok(job.copy());
+        }
+        
         Err(ProtocolError::NotFound)
     }
 
-    pub fn peek_ready(&self) -> Result<&Job, ProtocolError> {
-        self.ready.peek().ok_or(ProtocolError::NotFound)
+    pub fn peek_ready(&self) -> Result<Job, ProtocolError> {
+        self.ready.peek().map(|j| j.copy()).ok_or(ProtocolError::NotFound)
     }
 
-    pub fn peek_delayed(&self) -> Result<&Job, ProtocolError> {
-        self.delayed.peek().ok_or(ProtocolError::NotFound)
+    pub fn peek_delayed(&self) -> Result<Job, ProtocolError> {
+        self.delayed.peek().map(|j| j.copy()).ok_or(ProtocolError::NotFound)
     }
 
-    pub fn peek_buried(&self) -> Result<&Job, ProtocolError> {
-        self.buried.peek().ok_or(ProtocolError::NotFound)
+    pub fn peek_buried(&self) -> Result<Job, ProtocolError> {
+        self.buried.peek().map(|j| j.copy()).ok_or(ProtocolError::NotFound)
     }
 
     /// 更新全局作业统计

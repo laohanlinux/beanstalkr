@@ -146,7 +146,8 @@ impl Command {
         let id = next_job_id();
         let data = self.params.get("data").unwrap();
 
-        if ttr <= 0 {
+        // TTR 最小值为 1 秒（对应 C 版本: if (ttr < 1000000000) ttr = 1000000000;）
+        if ttr < 1 {
             ttr = 1;
         }
         let max_job_size = GLOBAL_STATS.max_job_size.load(Ordering::SeqCst) as i64;

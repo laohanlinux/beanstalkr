@@ -329,6 +329,31 @@ impl Job {
     pub fn clear_reserver(&mut self) {
         self.reserver = None;
     }
+    
+    /// 创建 Job 的副本
+    /// 对应 C 版本中的 job_copy 函数
+    /// 用于 peek 命令，避免在发送过程中原 job 被释放
+    pub fn copy(&self) -> Self {
+        Job {
+            id: *self.id(),  // 保持相同 ID
+            priority: self.priority,
+            delay: self.delay,
+            started_delay_at: self.started_delay_at,
+            started_ttr_at: self.started_ttr_at,
+            ttr: self.ttr,
+            bytes: self.bytes,
+            data: self.data.clone(),
+            state: *self.state(),
+            timestamp: self.timestamp,
+            tube: self.tube.clone(),
+            reserves: self.reserves,
+            timeouts: self.timeouts,
+            releases: self.releases,
+            buries: self.buries,
+            kicks: self.kicks,
+            reserver: self.reserver,
+        }
+    }
 }
 
 impl PriorityQueueItem for Job {

@@ -23,7 +23,7 @@ mod backup;
 mod operation;
 
 use crate::architecture::stats::{set_draining, GLOBAL_STATS};
-use crate::backup::binlog::{init_binlog, get_binlog, BinlogManager};
+use crate::backup::binlog::{init_binlog, get_binlog};
 use crate::operation::dispatch::Dispatch;
 use crate::operation::ClientHandler;
 use std::sync::atomic::Ordering;
