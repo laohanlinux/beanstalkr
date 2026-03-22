@@ -151,16 +151,17 @@ impl Command {
             ttr = 1;
         }
         let max_job_size = GLOBAL_STATS.max_job_size.load(Ordering::SeqCst) as i64;
+        // bytes 是 body 大小（不包括 \r\n），所以检查 body 大小是否超过限制
         if bytes > max_job_size {
             return Err(ProtocolError::JobTooBig.into());
-        }
-        // 验证数据长度（注意：body 包含 \r\n，所以 bytes 应该等于 data.len()）
-        if bytes != data.len() as i64 {
-            return Err(anyhow!(ProtocolError::BadFormat));
         }
         // 验证数据以 \r\n 结尾
         if !data.ends_with("\r\n") {
             return Err(ProtocolError::ExpectedCrlf.into());
+        }
+        // 验证数据长度：data 包含 body + \r\n，所以 data.len() 应该等于 bytes + 2
+        if data.len() as i64 != bytes + 2 {
+            return Err(anyhow!(ProtocolError::BadFormat));
         }
         self.job = Job::new(id, pri, delay, ttr, bytes, data.clone());
         debug!("create new job from params: {:?}", self.job.id());
@@ -248,9 +249,12 @@ impl Command {
         // 解析第2轮命令
         //        debug!("GOT MORE {:?}", self);
         if self.name == CommandKind::Put.to_string() {
+            // read_line + trim_end() 会去掉 \r\n，但协议要求数据以 \r\n 结尾
+            // 所以需要手动添加 \r\n
+            let data_with_crlf = raw_command.to_owned() + "\r\n";
             self.params
-                .insert("data".to_owned(), raw_command.to_owned());
-            self.raw_command = raw_command.to_owned() + "\r\n";
+                .insert("data".to_owned(), data_with_crlf.clone());
+            self.raw_command = data_with_crlf;
             self.create_job_from_params()?;
             self.not_complete_received = false;
         }

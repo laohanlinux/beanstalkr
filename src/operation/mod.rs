@@ -437,7 +437,7 @@ mod test {
             }
             
             let mut process = Command::new("cargo")
-                .args(["run", "--", "-a", "127.0.0.1:11301"])
+                .args(["run", "--", "-l", "127.0.0.1", "-p", "11301"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()
