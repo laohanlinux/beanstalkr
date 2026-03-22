@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Error;
@@ -273,6 +274,7 @@ where
                 debug!("[{}] process ready queue", self.name);
                 ready_job.set_state(State::Reserved).unwrap();
                 ready_job.inc_reserves();
+                ready_job.set_reserver(client_id); // 设置预留者
                 self.reserved.enqueue(ready_job);
                 
                 // 减少等待计数
@@ -300,6 +302,7 @@ where
                     } else {
                         client.request.job.set_state(State::Reserved).unwrap();
                         client.request.job.inc_reserves();
+                        client.request.job.set_reserver(*id); // 设置预留者
                         self.reserved.enqueue(client.request.job.clone());
                         debug!(
                             "[{}] ready {}, reserved {}",
@@ -342,6 +345,49 @@ where
         self.awaiting_clients.remove(client_id);
         self.awaiting_timed_clients.remove(client_id);
         self.awaiting_clients_flag.remove(client_id);
+        
+        // 将客户端 reserved 的 jobs 重新入队（类似 C 版本的 enqueue_reserved_jobs）
+        self.reenqueue_client_reserved_jobs(client_id);
+    }
+    
+    /// 将指定客户端 reserved 的 jobs 重新放回 ready 队列
+    /// 类似于 C 版本的 enqueue_reserved_jobs
+    fn reenqueue_client_reserved_jobs(&mut self, client_id: &ClientId) {
+        let mut jobs_to_reenqueue = Vec::new();
+        
+        // 收集所有属于该客户端的 reserved jobs
+        // 由于 FakeHeap 不支持直接遍历并移除，我们需要先收集
+        let all_reserved: Vec<_> = std::iter::from_fn(|| self.reserved.dequeue()).collect();
+        
+        for mut job in all_reserved {
+            if job.reserver() == Some(*client_id) {
+                // 清除 reserver
+                job.clear_reserver();
+                jobs_to_reenqueue.push(job);
+            } else {
+                // 不属于该客户端，放回 reserved 队列
+                self.reserved.enqueue(job);
+            }
+        }
+        
+        // 将收集到的 jobs 重新入队
+        for mut job in jobs_to_reenqueue {
+            // 更新统计
+            GLOBAL_STATS.current_jobs_reserved.fetch_sub(1, Ordering::SeqCst);
+            self.update_global_job_stats();
+            
+            // 尝试重新入队，如果失败则 bury
+            job.set_state(State::Ready).unwrap();
+            let total_size = self.ready.len() + self.delayed.len() + self.reserved.len() + self.buried.len();
+            if total_size >= Self::MAX_QUEUE_SIZE {
+                // 内存不足，bury job
+                job.set_state(State::Buried).unwrap();
+                job.inc_buries();
+                self.buried.enqueue(job);
+            } else {
+                self.ready.enqueue(job);
+            }
+        }
     }
 
     /// 最大队列大小（用于模拟内存限制）

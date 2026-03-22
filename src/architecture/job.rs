@@ -52,6 +52,9 @@ pub struct Job {
     releases: u64,
     buries: u64,
     kicks: u64,
+    
+    // 预留此 job 的客户端 ID（用于连接断开时重新入队）
+    reserver: Option<ClientId>,
 }
 
 impl Ord for Job {
@@ -122,6 +125,7 @@ impl Default for Job {
             releases: 0,
             buries: 0,
             kicks: 0,
+            reserver: None,
         }
     }
 }
@@ -168,6 +172,7 @@ impl Job {
             releases: 0,
             buries: 0,
             kicks: 0,
+            reserver: None,
         };
         job.enqueue();
         job
@@ -308,6 +313,21 @@ impl Job {
     /// 获取优先级键值
     fn priority_key(&self) -> i64 {
         self.priority
+    }
+
+    /// 获取预留此 job 的客户端 ID
+    pub fn reserver(&self) -> Option<ClientId> {
+        self.reserver
+    }
+
+    /// 设置预留此 job 的客户端 ID
+    pub fn set_reserver(&mut self, client_id: ClientId) {
+        self.reserver = Some(client_id);
+    }
+
+    /// 清除预留此 job 的客户端 ID
+    pub fn clear_reserver(&mut self) {
+        self.reserver = None;
     }
 }
 
