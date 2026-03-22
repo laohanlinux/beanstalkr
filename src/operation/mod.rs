@@ -20,6 +20,7 @@ use crate::architecture::error::ProtocolError;
 use crate::architecture::job::next_client_id;
 use crate::architecture::stats::GLOBAL_STATS;
 use crate::architecture::tube::ClientId;
+use crate::util::configure_client_socket;
 
 /// 验证 tube 名称是否符合规范
 /// - 不能超过 200 字节
@@ -79,6 +80,11 @@ impl ClientHandler {
     /// * `stream` - TCP 连接
     /// * `dispatch` - 调度器引用
     pub fn new(stream: TcpStream, dispatch: Arc<Mutex<Dispatch>>) -> Self {
+        // 配置 socket 选项（TCP_NODELAY 等）
+        if let Err(e) = configure_client_socket(&stream) {
+            tracing::warn!("Failed to configure client socket: {}", e);
+        }
+        
         let (tx, rx) = futures_mpsc::unbounded();
         let (reserve_tx, reserve_rx) = tokio::sync::mpsc::channel(1);
         let once_channel = OnceChannel::new(reserve_tx);

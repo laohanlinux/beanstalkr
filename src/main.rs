@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use tokio::io;
-use tokio::net::TcpListener;
+// TcpListener 由 util::create_server_socket 创建
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Mutex;
 use tokio::task;
@@ -21,11 +21,13 @@ mod architecture;
 mod backend;
 mod backup;
 mod operation;
+mod util;
 
 use crate::architecture::stats::{set_draining, GLOBAL_STATS};
 use crate::backup::binlog::{init_binlog, get_binlog};
 use crate::operation::dispatch::Dispatch;
 use crate::operation::ClientHandler;
+use crate::util::create_server_socket;
 use std::sync::atomic::Ordering;
 
 /// 切换到指定用户（需要 root 权限）
@@ -68,14 +70,22 @@ fn switch_user(_user: &str) -> Result<(), String> {
 #[derive(Parser, Debug)]
 #[command(name = "beanstalkr", version = env!("CARGO_PKG_VERSION"))]
 struct Opt {
-    /// 日志详细程度（可多次指定，-v 表示警告，-vv 表示信息，-vvv 表示调试）
-    #[arg(short, long, action = clap::ArgAction::Count)]
+    /// 显示版本信息
+    #[arg(short = 'v', long)]
+    version: bool,
+    
+    /// 日志详细程度（可多次指定，-V 表示警告，-VV 表示信息，-VVV 表示调试）
+    #[arg(short = 'V', long, action = clap::ArgAction::Count)]
     #[allow(dead_code)]
     verbose: u8,
 
     /// 监听地址
-    #[arg(short, long, default_value = "0.0.0.0:11300")]
+    #[arg(short = 'l', long, default_value = "0.0.0.0")]
     addr: String,
+    
+    /// 监听端口
+    #[arg(short = 'p', long, default_value = "11300")]
+    port: u16,
     
     /// 最大任务大小（字节）
     #[arg(short = 'z', long, default_value = "65535")]
@@ -90,7 +100,7 @@ struct Opt {
     binlog_dir: String,
     
     /// Binlog 文件最大大小（字节）
-    #[arg(long, default_value = "10485760")]  // 10MB
+    #[arg(short = 's', long, default_value = "10485760")]  // 10MB
     binlog_size: u64,
     
     /// fsync 间隔（毫秒），0 表示每次写入都 fsync，默认 50ms
@@ -148,6 +158,12 @@ async fn main() -> io::Result<()> {
 
     let opt: Opt = Opt::parse();
     
+    // 处理 -v / --version 选项
+    if opt.version {
+        println!("beanstalkr {}", env!("CARGO_PKG_VERSION"));
+        process::exit(0);
+    }
+    
     // 初始化最大任务大小
     GLOBAL_STATS.max_job_size.store(opt.max_job_size as u64, Ordering::SeqCst);
     
@@ -195,8 +211,9 @@ async fn main() -> io::Result<()> {
         }
     }
     
-    let listener = TcpListener::bind(&opt.addr).await?;
-    info!(addr = %opt.addr, max_job_size = opt.max_job_size, "Listening on {}", listener.local_addr()?);
+    let bind_addr = format!("{}:{}", opt.addr, opt.port);
+    let listener = create_server_socket(&bind_addr).await?;
+    info!(addr = %bind_addr, max_job_size = opt.max_job_size, "Listening on {}", listener.local_addr()?);
     
     let dispatch: Arc<Mutex<Dispatch>> = Arc::new(Mutex::new(Dispatch::new()));
     
