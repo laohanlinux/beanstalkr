@@ -28,6 +28,42 @@ use crate::operation::dispatch::Dispatch;
 use crate::operation::ClientHandler;
 use std::sync::atomic::Ordering;
 
+/// 切换到指定用户（需要 root 权限）
+#[cfg(unix)]
+fn switch_user(user: &str) -> Result<(), String> {
+    use std::ffi::CString;
+    
+    unsafe {
+        // 获取用户信息
+        let c_user = CString::new(user).map_err(|e| format!("Invalid username: {}", e))?;
+        let pwent = libc::getpwnam(c_user.as_ptr());
+        if pwent.is_null() {
+            return Err(format!("User '{}' not found", user));
+        }
+        
+        let gid = (*pwent).pw_gid;
+        let uid = (*pwent).pw_uid;
+        
+        // 先设置组 ID
+        if libc::setgid(gid) != 0 {
+            return Err(format!("Failed to set gid {}: {}", gid, std::io::Error::last_os_error()));
+        }
+        
+        // 再设置用户 ID
+        if libc::setuid(uid) != 0 {
+            return Err(format!("Failed to set uid {}: {}", uid, std::io::Error::last_os_error()));
+        }
+        
+        info!("Switched to user {} (uid={}, gid={})", user, uid, gid);
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+fn switch_user(_user: &str) -> Result<(), String> {
+    Err("User switching is only supported on Unix systems".to_string())
+}
+
 /// Beanstalkd 协议的 Rust 实现
 #[derive(Parser, Debug)]
 #[command(name = "beanstalkr", version = env!("CARGO_PKG_VERSION"))]
@@ -78,6 +114,21 @@ async fn main() -> io::Result<()> {
         info!("beanstalkr exit");
         process::exit(0);
     });
+
+    // 设置 SIGPIPE 信号处理器（忽略 SIGPIPE，与 C 版本一致）
+    match signal(SignalKind::pipe()) {
+        Ok(mut sigpipe) => {
+            task::spawn(async move {
+                loop {
+                    sigpipe.recv().await;
+                    debug!("Received SIGPIPE, ignoring");
+                }
+            });
+        }
+        Err(e) => {
+            error!("Failed to setup SIGPIPE handler: {}", e);
+        }
+    }
 
     // 设置 SIGUSR1 信号处理器（Drain 模式）
     match signal(SignalKind::user_defined1()) {
@@ -133,6 +184,14 @@ async fn main() -> io::Result<()> {
             Err(e) => {
                 error!("Failed to initialize binlog: {}", e);
             }
+        }
+    }
+    
+    // 切换用户（如果指定了 -u 参数）
+    if let Some(ref user) = opt.user {
+        if let Err(e) = switch_user(user) {
+            error!("Failed to switch user: {}", e);
+            std::process::exit(1);
         }
     }
     
