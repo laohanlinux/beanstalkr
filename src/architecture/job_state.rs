@@ -30,34 +30,35 @@ pub fn is_valid_transitions_to(from: State, to: State) -> Result<bool, Transitio
                 return Ok(true);
             }
             let txt: &'static str = Box::leak(format!("{}", from).into_boxed_str());
-            return Err(TransitionError::Ready(txt));
+            Err(TransitionError::Ready(txt))
         }
         State::Delayed => {
             let ok = from == State::Reserved;
             if ok {
                 return Ok(true);
             }
-            return Err(TransitionError::Delayed(Box::leak(
+            Err(TransitionError::Delayed(Box::leak(
                 format!("{}", from).into_boxed_str(),
-            )));
+            )))
         }
         State::Reserved => {
-            let ok = from == State::Ready;
+            // reserve-job 命令允许从 Ready、Buried 或 Delayed 状态转换到 Reserved
+            let ok = from == State::Ready || from == State::Buried || from == State::Delayed;
             if ok {
                 return Ok(true);
             }
-            return Err(TransitionError::Reserved(Box::leak(
+            Err(TransitionError::Reserved(Box::leak(
                 format!("{}", from).into_boxed_str(),
-            )));
+            )))
         }
         State::Buried => {
             let ok = from == State::Reserved;
             if ok {
                 return Ok(true);
             }
-            return Err(TransitionError::Buried(Box::leak(
+            Err(TransitionError::Buried(Box::leak(
                 format!("{}", from).into_boxed_str(),
-            )));
+            )))
         }
     }
 }

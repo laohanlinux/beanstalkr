@@ -1,17 +1,18 @@
-use async_std::channel::Sender;
-use async_std::sync::Arc;
-use failure::{self, err_msg, Error};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use anyhow::{anyhow, Error};
+use tokio::sync::mpsc::UnboundedSender;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct OnceChannel<T> {
     sent: Arc<AtomicBool>,
-    sender: Sender<T>,
+    sender: UnboundedSender<T>,
 }
 
 impl<T> OnceChannel<T> {
-    pub fn new(tx: Sender<T>) -> OnceChannel<T> {
+    pub fn new(tx: UnboundedSender<T>) -> OnceChannel<T> {
         OnceChannel {
             sent: Arc::new(AtomicBool::new(true)),
             sender: tx,
@@ -29,15 +30,13 @@ impl<T> OnceChannel<T> {
         let ret = self
             .sent
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed);
-        if ret.is_err() {
-            return Err(err_msg("channel has sent a value"));
+        if ret.is_err() || ret.unwrap_or(true) {
+            return Err(anyhow!("channel has sent a value"));
         }
-        if !ret.unwrap() {
-            return Err(err_msg("channel has sent a value"));
-        }
-
         debug!("Get once channel locker");
-        _ = self.sender.send(value).await;
-        return Ok(());
+        self.sender
+            .send(value)
+            .map_err(|_| anyhow!("reserve reply channel closed"))?;
+        Ok(())
     }
 }

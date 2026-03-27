@@ -1,18 +1,25 @@
-use std::fmt::{Debug, Formatter};
+
 use crate::architecture::tube::{Id, PriorityQueue, PriorityQueueItem};
 use crate::backend::fake_queue::FakeHeap;
+use std::hash::Hash;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct MinHeap<H: PriorityQueueItem + Ord> {
+/// 高性能优先队列实现
+/// 
+/// 使用 FakeHeap 作为底层存储，支持 O(log n) 的入队和出队操作，
+/// 以及 O(1) 的按 ID 查找和 O(n) 的按 ID 删除。
+pub struct MinHeap<H: PriorityQueueItem + Ord + Clone + Hash + Send> {
     heap: FakeHeap<H>,
+    #[allow(dead_code)]
     tube_name: String,
+    #[allow(dead_code)]
     timestamp: i64,
 }
 
 
 impl<H> MinHeap<H>
 where
-    H: PriorityQueueItem + Ord,
+    H: PriorityQueueItem + Ord + Clone + Hash + Send,
 {
     pub fn new(name: String) -> Self {
         MinHeap {
@@ -28,11 +35,12 @@ where
 
 impl<H> PriorityQueue<H> for MinHeap<H>
 where
-    H: PriorityQueueItem + Ord,
+    H: PriorityQueueItem + Ord + Clone + Hash + Send,
 {
     fn enqueue(&mut self, mut item: H) {
         item.enqueue();
-        self.heap.push(item);
+        // 使用 push_with_id 来维护 HashMap 索引，实现 O(1) 查找
+        self.heap.push_with_id(item, |i| *i.id());
     }
 
     fn dequeue(&mut self) -> Option<H> {
@@ -46,18 +54,19 @@ where
         self.heap.peek_min()
     }
 
+    fn peek_all(&self) -> Vec<&H> {
+        self.heap.iter().collect()
+    }
+
     fn find(&self, id: &Id) -> Option<&H> {
-        match self.heap.binary_search_by_key(id, |item| item.id().clone()) {
-            Ok(idx) => self.heap.get(idx),
-            _ => None,
-        }
+        // 使用 HashMap 索引实现 O(1) 查找
+        self.heap.get_by_id(*id)
+            .or_else(|| self.heap.find_by_key(*id, |item| *item.id()))
     }
 
     fn remove(&mut self, id: &Id) -> Option<H> {
-        match self.heap.binary_search_by_key(id, |item| item.id().clone()) {
-            Ok(idx) => self.heap.remove(idx),
-            _ => None,
-        }
+        // 使用 HashMap 索引实现 O(1) 查找 + O(n) 堆重建
+        self.heap.remove_by_id(*id, |item| *item.id())
     }
 
     fn len(&self) -> usize {

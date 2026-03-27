@@ -1,31 +1,43 @@
-use failure::Fail;
+use thiserror::Error;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum TransitionError {
-    #[fail(display = "failed to transition state from {} to Ready", _0)]
+    #[error("failed to transition state from {0} to Ready")]
     Ready(&'static str),
-    #[fail(display = "failed to transition state from {} to Delayed", _0)]
+    #[error("failed to transition state from {0} to Delayed")]
     Delayed(&'static str),
-    #[fail(display = "failed to transition state from {} to Reserved", _0)]
+    #[error("failed to transition state from {0} to Reserved")]
     Reserved(&'static str),
-    #[fail(display = "failed to transition state from {} to Buried", _0)]
+    #[error("failed to transition state from {0} to Buried")]
     Buried(&'static str),
 }
 
-#[derive(Debug, Fail, Clone)]
+#[derive(Debug, Error, Clone)]
 pub enum ProtocolError {
-    #[fail(display = "BAD_FORMAT")]
+    #[error("BAD_FORMAT")]
     BadFormat,
-    #[fail(display = "UNKNOWN_COMMAND")]
+    #[error("UNKNOWN_COMMAND")]
     UnknownCommand,
-    #[fail(display = "NOT_FOUND")]
+    #[error("NOT_FOUND")]
     NotFound,
-    #[fail(display = "NOT_IGNORED")]
+    #[error("NOT_IGNORED")]
     NotIgnored,
-    #[fail(display = "EXPECTED_CRLF")]
+    #[error("EXPECTED_CRLF")]
     ExpectedCrlf,
-    #[fail(display = "JOB_TOO_BIG")]
+    #[error("JOB_TOO_BIG")]
     JobTooBig,
-    #[fail(display = "TIMED_OUT")]
+    #[error("TIMED_OUT")]
     TimedOut,
+    #[error("DEADLINE_SOON")]
+    DeadlineSoon,
+    #[error("DRAINING")]
+    Draining,
+    #[error("BURIED")]
+    Buried,
+    #[error("NOT_KICKABLE")]
+    NotKickable,
+    #[error("OUT_OF_MEMORY")]
+    OutOfMemory,
+    #[error("INTERNAL_ERROR")]
+    InternalError,
 }
