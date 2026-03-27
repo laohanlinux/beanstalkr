@@ -269,8 +269,14 @@ where
                     self.name
                 );
                 self.ready.enqueue(ready_job);
+                self.awaiting_clients_flag.remove(&client_id);
+                self.awaiting_timed_clients.remove(&client_id);
+                GLOBAL_STATS.dec_waiting();
             } else {
                 self.awaiting_clients_flag.remove(&client_id);
+                // reserve-with-timeout 同时在 awaiting_timed_clients 中登记；从 ready
+                // 队列提前匹配时必须一并移除，否则超时逻辑会重复处理同一客户端。
+                self.awaiting_timed_clients.remove(&client_id);
                 debug!("[{}] process ready queue", self.name);
                 ready_job.set_state(State::Reserved).unwrap();
                 ready_job.inc_reserves();
@@ -288,52 +294,54 @@ where
     }
 
     pub async fn process_timed_clients(&mut self) {
-        let mut need_delete_id = vec![];
         let mut needs_stats_update = false;
-        
-        for (id, client) in self.awaiting_timed_clients.iter_mut() {
-            //            debug!("Client await job timeout: {}", id);
-            if client.time_left() <= 0 {
-                if let Some(job) = self.ready.dequeue() {
-                    client.request.job = job;
-                    if client.tx.send(client.request.clone()).await.is_err() {
-                        warn!("[{}] client has closed during timed reserve", self.name);
-                        self.ready.enqueue(client.request.job.clone());
-                    } else {
-                        client.request.job.set_state(State::Reserved).unwrap();
-                        client.request.job.inc_reserves();
-                        client.request.job.set_reserver(*id); // 设置预留者
-                        self.reserved.enqueue(client.request.job.clone());
-                        debug!(
-                            "[{}] ready {}, reserved {}",
-                            self.name,
-                            self.ready.len(),
-                            self.reserved.len()
-                        );
-                        needs_stats_update = true;
-                    }
-                } else {
-                    // 超时，返回 TIMED_OUT (beanstalkd protocol behavior)
-                    debug!("[{}] reserve-with-timeout expired for client {}", self.name, id);
-                    client.request.err = Err(ProtocolError::TimedOut);
-                    let _ = client.tx.send(client.request.clone()).await;
-                }
-                need_delete_id.push(*id);
+
+        // 不可在 HashMap::iter_mut 内 await：跨 yield 持有 &mut 会阻塞同连接上的其它入队/清理。
+        let ids: Vec<Id> = self.awaiting_timed_clients.keys().copied().collect();
+        for id in ids {
+            let expired = self
+                .awaiting_timed_clients
+                .get(&id)
+                .is_some_and(|c| c.time_left() <= 0);
+            if !expired {
+                continue;
             }
+
+            let Some(mut client) = self.awaiting_timed_clients.remove(&id) else {
+                continue;
+            };
+            let _ = self.awaiting_clients.remove(&id);
+
+            if let Some(job) = self.ready.dequeue() {
+                client.request.job = job;
+                if client.tx.send(client.request.clone()).await.is_err() {
+                    warn!("[{}] client has closed during timed reserve", self.name);
+                    self.ready.enqueue(client.request.job.clone());
+                } else {
+                    client.request.job.set_state(State::Reserved).unwrap();
+                    client.request.job.inc_reserves();
+                    client.request.job.set_reserver(id);
+                    self.reserved.enqueue(client.request.job.clone());
+                    debug!(
+                        "[{}] ready {}, reserved {}",
+                        self.name,
+                        self.ready.len(),
+                        self.reserved.len()
+                    );
+                    needs_stats_update = true;
+                }
+            } else {
+                debug!("[{}] reserve-with-timeout expired for client {}", self.name, id);
+                client.request.err = Err(ProtocolError::TimedOut);
+                let _ = client.tx.send(client.request.clone()).await;
+            }
+
+            self.awaiting_clients_flag.remove(&id);
+            GLOBAL_STATS.dec_waiting();
         }
-        
-        // 更新全局统计
+
         if needs_stats_update {
             self.update_global_job_stats();
-        }
-        
-        // 清理已处理的客户端并减少等待计数
-        for id in &need_delete_id {
-            self.awaiting_timed_clients.remove(id);
-            self.awaiting_clients.remove(id);
-            self.awaiting_clients_flag.remove(id);
-            // 减少等待计数
-            GLOBAL_STATS.dec_waiting();
         }
     }
 
@@ -457,17 +465,11 @@ where
         cmd: Command,
         tx: OnceChannel<Command>,
     ) -> Result<(), Error> {
-        let id = next_job_id();
-        let entry = self.awaiting_clients_flag.entry(client_id).or_insert(id);
-        if *entry != id {
-            return Ok(());
-        }
-        
-        // 解析超时时间
+        // 解析超时时间（须先于 flag 逻辑：timeout=0 分支不使用 or_insert 防重入）
         let timeout = cmd.params.get("timeout")
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
-        
+
         // 如果 timeout=0，立即尝试获取任务或返回 TIMED_OUT
         if timeout == 0 {
             // 立即清理 flag，因为这不是一个持久的等待
@@ -503,6 +505,19 @@ where
             }
             return Ok(());
         }
+
+        // 若上一轮未清除 timed 等待（例如 process_ready_queue 发送失败），map 中仍有
+        // client_id：直接 return 会既不响应也不入队，客户端已 open OnceChannel 会永久挂起。
+        if self.awaiting_timed_clients.contains_key(&client_id) {
+            if self.awaiting_clients_flag.contains_key(&client_id) {
+                GLOBAL_STATS.dec_waiting();
+            }
+            self.awaiting_timed_clients.remove(&client_id);
+            self.awaiting_clients.remove(&client_id);
+            self.awaiting_clients_flag.remove(&client_id);
+        }
+        let id = next_job_id();
+        self.awaiting_clients_flag.insert(client_id, id);
         
         // 更新等待计数
         GLOBAL_STATS.inc_waiting();

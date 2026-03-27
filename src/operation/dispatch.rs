@@ -327,8 +327,13 @@ impl Dispatch {
                     cmd = cmd_rx.next().fuse() => if let Some(command) = cmd {
                          Self::handle_command(&mut clients, &mut tube, command.clone()).await;
                          let cmd = CommandKind::from_str(&command.1.name).unwrap();
-                         if cmd == CommandKind::ReserveWithTimeout || cmd == CommandKind::Reserve{
-                          _=  _tx.send(()).await;
+                         // 参照 C 实现 (prot.c): enqueue_job/process_queue - Put 和 Reserve 后同步尝试匹配
+                         if cmd == CommandKind::Put
+                             || cmd == CommandKind::ReserveWithTimeout
+                             || cmd == CommandKind::Reserve
+                         {
+                             tube.process().await;
+                             tube.process_timed_clients().await;
                          }
                          // 重置清理计数器，因为可能有新活动
                          empty_check_counter = 0;
@@ -362,7 +367,8 @@ impl Dispatch {
                         return;
                     }
 
-                    // 插入全局存储
+                    // 插入全局存储（需先设置 tube，供 Delete 等命令路由）
+                    command.1.job.set_tube(tube.name().to_string());
                     global_insert_job(command.1.job.clone());
                     
                     GLOBAL_STATS.inc_total_jobs();

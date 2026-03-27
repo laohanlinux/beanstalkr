@@ -1,14 +1,11 @@
-#![recursion_limit = "512"]
-
-#[macro_use]
-extern crate lazy_static;
-extern crate strum;
-#[macro_use]
-extern crate strum_macros;
-
 use std::process;
 use std::sync::Arc;
 
+use beanstalkr::architecture::stats::{set_draining, GLOBAL_STATS};
+use beanstalkr::backup::binlog::{get_binlog, init_binlog};
+use beanstalkr::operation::dispatch::Dispatch;
+use beanstalkr::operation::ClientHandler;
+use beanstalkr::util::create_server_socket;
 use clap::Parser;
 use tokio::io;
 // TcpListener 由 util::create_server_socket 创建
@@ -16,18 +13,6 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Mutex;
 use tokio::task;
 use tracing::{debug, error, info, Instrument};
-
-mod architecture;
-mod backend;
-mod backup;
-mod operation;
-mod util;
-
-use crate::architecture::stats::{set_draining, GLOBAL_STATS};
-use crate::backup::binlog::{init_binlog, get_binlog};
-use crate::operation::dispatch::Dispatch;
-use crate::operation::ClientHandler;
-use crate::util::create_server_socket;
 use std::sync::atomic::Ordering;
 
 /// 切换到指定用户（需要 root 权限）
@@ -68,7 +53,7 @@ fn switch_user(_user: &str) -> Result<(), String> {
 
 /// Beanstalkd 协议的 Rust 实现
 #[derive(Parser, Debug)]
-#[command(name = "beanstalkr", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "beanstalkr", disable_version_flag = true)]
 struct Opt {
     /// 显示版本信息
     #[arg(short = 'v', long)]

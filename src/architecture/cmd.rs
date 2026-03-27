@@ -327,7 +327,15 @@ impl Command {
         if let Some(ref yaml) = self.yaml {
             return (false, yaml.clone());
         }
-        (false, self.job.data.clone())
+        // Reserve/Peek 的 body：协议要求精确发送 <bytes> 字节（不含额外 \r\n）
+        let bytes = self.job.bytes as usize;
+        let body = self.job.data.as_bytes();
+        let body = if bytes <= body.len() {
+            String::from_utf8_lossy(&body[..bytes]).to_string()
+        } else {
+            self.job.data.clone()
+        };
+        (false, body)
     }
 }
 

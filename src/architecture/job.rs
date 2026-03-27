@@ -1,5 +1,6 @@
 use std::cmp::Ordering as CmpOrdering;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Error};
 use chrono::Local;
@@ -11,18 +12,19 @@ use crate::architecture::tube::{ClientId, Id, PriorityQueueItem};
 use crate::operation::once_channel::OnceChannel;
 
 lazy_static::lazy_static! {
-    /// 全局 ID 生成器，用于生成唯一的 Job ID 和 Client ID
-    static ref ID_GENERATOR: AtomicU64 = AtomicU64::new(0);
+    /// 全局 Job ID 生成器（与 Client ID 分离，避免 job / client 序号互相消耗）
+    static ref JOB_ID_GENERATOR: AtomicU64 = AtomicU64::new(0);
+    static ref CLIENT_ID_GENERATOR: AtomicU64 = AtomicU64::new(1);
 }
 
 /// 生成下一个唯一的 Job ID
 pub fn next_job_id() -> Id {
-    ID_GENERATOR.fetch_add(1, Ordering::SeqCst)
+    JOB_ID_GENERATOR.fetch_add(1, Ordering::SeqCst)
 }
 
 /// 生成下一个唯一的 Client ID
 pub fn next_client_id() -> ClientId {
-    ID_GENERATOR.fetch_add(1, Ordering::SeqCst)
+    CLIENT_ID_GENERATOR.fetch_add(1, Ordering::SeqCst)
 }
 
 /// 表示一个 Beanstalkd 任务
@@ -390,6 +392,9 @@ pub struct AwaitingClient {
     id: ClientId,
     queued_at: i64,
     timeout: i64,
+    /// Monotonic deadline for `reserve-with-timeout` (wall-clock `queued_at` alone can stall
+    /// if `timestamp_nanos_opt()` is `None` and both sides use `unwrap_or(0)`).
+    deadline: Option<Instant>,
     pub(crate) tx: OnceChannel<Command>,
     pub(crate) request: Command,
 }
@@ -401,6 +406,7 @@ impl AwaitingClient {
             id: client_id,
             queued_at: now,
             timeout: 0,
+            deadline: None,
             tx,
             request: cmd,
         }
@@ -409,16 +415,22 @@ impl AwaitingClient {
     /// 创建带超时的客户端
     pub fn new_with_timeout(client_id: ClientId, cmd: Command, tx: OnceChannel<Command>, timeout_secs: i64) -> Self {
         let now = Local::now().timestamp_nanos_opt().unwrap_or(0);
+        let secs = timeout_secs.max(0) as u64;
+        let timeout_ns = timeout_secs.max(0).saturating_mul(NANOS_PER_SEC);
         AwaitingClient {
             id: client_id,
             queued_at: now,
-            timeout: timeout_secs * NANOS_PER_SEC,
+            timeout: timeout_ns,
+            deadline: Some(Instant::now() + Duration::from_secs(secs)),
             tx,
             request: cmd,
         }
     }
 
     pub fn time_left(&self) -> i64 {
+        if let Some(dl) = self.deadline {
+            return dl.saturating_duration_since(Instant::now()).as_nanos() as i64;
+        }
         let now = Local::now().timestamp_nanos_opt().unwrap_or(0);
         (self.timeout - (now - self.queued_at)).max(0)
     }
@@ -427,8 +439,6 @@ impl AwaitingClient {
 impl std::hash::Hash for AwaitingClient {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
-        self.queued_at.hash(state);
-        self.timeout.hash(state);
     }
 }
 
@@ -479,6 +489,19 @@ mod tests {
     use super::*;
     use crate::architecture::tube::PriorityQueue;
     use crate::backend::min_heap::MinHeap;
+    use crate::operation::once_channel::OnceChannel;
+    use std::time::Duration;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn timed_client_deadline_expires() {
+        let (tx, _rx) = unbounded_channel();
+        let oc = OnceChannel::new(tx);
+        let c = AwaitingClient::new_with_timeout(1, Command::default(), oc, 1);
+        assert!(c.time_left() > 0, "time_left={}", c.time_left());
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(c.time_left() <= 0, "time_left={}", c.time_left());
+    }
 
     #[test]
     fn it_enqueue_dequeue() {
